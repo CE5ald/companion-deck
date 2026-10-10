@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Companion Deck</string>
+    <string name="svc_channel">Companion Deck link</string>
+    <string name="svc_waiting">Waiting for laptop…</string>
+    <string name="svc_connected">Connected to %1$s</string>
+</resources>

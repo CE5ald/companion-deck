@@ -1,0 +1,58 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+android {
+    namespace 'com.companiondeck'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.companiondeck'
+        // Android 5.0. The UI is a WebView page, and Lollipop is the oldest release whose
+        // WebView is Chromium and updatable through Play - on KitKat it is a frozen
+        // Chromium 33 that cannot run this page.
+        minSdk 21
+        targetSdk 35
+        versionCode 3
+        versionName '1.0.0'
+    }
+
+    buildTypes {
+        debug {
+            minifyEnabled false
+        }
+        release {
+            minifyEnabled false
+            // Debug-signed so `assembleRelease` produces an installable APK without a
+            // keystore. Replace with your own signingConfig to publish anywhere.
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+
+    packagingOptions {
+        resources {
+            excludes += ['META-INF/*.version', 'kotlin/**', 'DebugProbesKt.bin']
+        }
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'androidx.core:core-ktx:1.12.0'
+    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.6.2'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
+}

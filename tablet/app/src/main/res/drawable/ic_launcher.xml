@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path
+        android:fillColor="#0B0D14"
+        android:pathData="M0,0h108v108h-108z" />
+
+    <!-- Stylised deck: a wide surface with a pulse line, in the accent cyan. -->
+    <path
+        android:fillColor="#2BE3D0"
+        android:pathData="M26,38h56a6,6 0,0 1,6 6v22a6,6 0,0 1,-6 6h-56a6,6 0,0 1,-6 -6v-22a6,6 0,0 1,6 -6zM26,44v22h56v-22z" />
+    <path
+        android:fillColor="#7C5CFF"
+        android:pathData="M32,56h9l4,-9 6,17 5,-11 4,3h16v4h-18l-3,-2 -6,13 -6,-18 -3,7h-8z" />
+</vector>

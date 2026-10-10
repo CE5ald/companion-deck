@@ -1,0 +1,10 @@
+# Let git normalise line endings, but pin the files where the wrong ending breaks things:
+# a shell script with CRLF fails on Linux and macOS, and a batch file with LF misbehaves on Windows.
+* text=auto
+gradlew text eol=lf
+*.sh text eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.jar binary
+*.jpg binary
+*.png binary

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Deck" parent="Theme.AppCompat.NoActionBar">
+        <!-- Matches the web UI's base surface so there is no flash of a different colour
+             while the WebView paints its first frame. -->
+        <item name="android:windowBackground">#05060A</item>
+        <item name="android:colorBackground">#05060A</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+    </style>
+</resources>

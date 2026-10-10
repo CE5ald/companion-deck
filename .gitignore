@@ -1,0 +1,25 @@
+# Build output
+bin/
+obj/
+build/
+.gradle/
+*.apk
+*.aab
+*.user
+
+# Local machine paths and secrets
+tablet/local.properties
+host/**/appsettings.Local.json
+pairing.json
+*.keystore
+*.jks
+
+# Tooling noise
+.idea/
+.vs/
+.vscode/
+*.log
+node_modules/
+Thumbs.db
+desktop.ini
+

@@ -1,0 +1,1192 @@
+/* ==========================================================================
+   Companion Deck - tablet UI
+
+   Laid out for a landscape control surface from about 600dp wide upward. The base
+   sizes are tuned for ~1024x600; the breakpoints at the end of this file adapt the
+   shell down to a landscape phone and up to a large tablet. See "responsive".
+
+   Performance rules this file obeys, because tablet GPUs are weak:
+     - animate transform and opacity only; never width/height/box-shadow
+     - no backdrop-filter and no blur() anywhere (older tablet GPUs fall off a cliff)
+     - gradients and solid fills instead of layered translucency
+     - keep continuous animation off paint properties. stroke-dashoffset is one: each
+       frame re-rasterises the shape on the CPU, so the gauge dials settle briefly and
+       then rest rather than animating between every reading (see .dial .fg)
+   ========================================================================== */
+
+:root {
+  --bg:          #05060A;
+  --surface-1:   #0B0E17;
+  --surface-2:   #121728;
+  --surface-3:   #1A2136;
+  --line:        #222B42;
+  --line-soft:   #171E2F;
+
+  --text:        #EAEEF7;
+  --text-dim:    #8291AB;
+  --text-mute:   #5B6880;
+
+  --accent:      #2BE3D0;
+  --accent-deep: #12A99A;
+  --violet:      #7C5CFF;
+  --good:        #35D07F;
+  --warn:        #FFB020;
+  --danger:      #FF5566;
+
+  --radius:      20px;
+  --radius-sm:   13px;
+  --rail-w:      84px;
+  --top-h:       52px;
+  --pad-x:       16px;
+  --art:         132px;
+  --art-full:    232px;
+
+  /* Display cutout and system-bar insets, set by the Android shell. WebView has no
+     env(safe-area-inset-*), so the host activity pushes the real values in. */
+  --inset-top:    0px;
+  --inset-right:  0px;
+  --inset-bottom: 0px;
+  --inset-left:   0px;
+
+  --ease: cubic-bezier(.22,.61,.36,1);
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  margin: 0; height: 100%; overflow: hidden;
+  background: var(--bg); color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  font-size: 15px; line-height: 1.35;
+  -webkit-user-select: none; user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+.sprite { position: absolute; width: 0; height: 0; }
+.hidden { display: none !important; }
+
+/* The `hidden` attribute only sets `display:none` at user-agent weight, so any explicit
+   `display` rule in this file silently defeats it. Since visibility is toggled through
+   `hidden` all over the UI, it has to win. */
+[hidden] { display: none !important; }
+
+svg.ic {
+  width: 22px; height: 22px; flex: none;
+  fill: none; stroke: currentColor; stroke-width: 1.9;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+/* Glyphs drawn as solid shapes rather than strokes. */
+svg.ic.solid { fill: currentColor; stroke: none; }
+
+/* ============================================================ app shell == */
+
+.app {
+  display: grid;
+  grid-template-columns: var(--rail-w) 1fr;
+  grid-template-rows: var(--top-h) 1fr;
+  grid-template-areas: "top top" "rail content";
+  height: 100vh;
+  background: var(--bg);
+  isolation: isolate;
+  padding: var(--inset-top) var(--inset-right) var(--inset-bottom) var(--inset-left);
+}
+
+/* The ambient wash lives on a fixed pseudo-element rather than on .app itself.
+   As a background on the grid container it sat in the same paint layer as every card,
+   so any descendant repaint - a gauge stroke changing - forced these two large radial
+   gradients to be re-rasterised too. On its own fixed layer it is painted once and
+   never touched again. */
+.app::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(900px 420px at 82% -12%, rgba(124,92,255,.13), transparent 62%),
+    radial-gradient(760px 380px at 6% 108%, rgba(43,227,208,.10), transparent 60%);
+}
+
+/* ================================================================ topbar == */
+
+.topbar {
+  grid-area: top;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 var(--pad-x) 0 calc(var(--pad-x) + 2px);
+  border-bottom: 1px solid var(--line-soft);
+}
+.tb-left, .tb-right { display: flex; align-items: center; gap: 10px; min-width: 0; }
+
+.host {
+  font-size: 14px; font-weight: 650; letter-spacing: .3px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 240px;
+}
+
+.dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--text-mute);
+  transition: background .3s var(--ease);
+}
+.dot.on { background: var(--accent); box-shadow: 0 0 10px rgba(43,227,208,.85); }
+
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 26px; padding: 0 10px; border-radius: 999px;
+  background: var(--surface-2); border: 1px solid var(--line);
+  font-size: 11.5px; font-weight: 600; color: var(--text-dim);
+  letter-spacing: .4px; text-transform: uppercase; white-space: nowrap;
+}
+.chip .ic { width: 14px; height: 14px; stroke-width: 2.1; }
+.chip.ghost { background: transparent; }
+.chip.hot { color: var(--accent); border-color: rgba(43,227,208,.36); }
+/* Charging mark inside a chip: solid and slightly smaller than a text icon, tucked against the
+   percentage so the pair reads as one value. */
+.chip .bolt { width: 11px; height: 11px; margin: 0 -2px 0 -3px; }
+
+.clock { font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; letter-spacing: .5px; }
+
+/* ================================================================== rail == */
+
+.rail {
+  grid-area: rail;
+  display: flex; flex-direction: column; align-items: stretch; gap: 4px;
+  padding: 10px 8px; border-right: 1px solid var(--line-soft);
+}
+
+.rail-btn {
+  position: relative;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  height: 62px; border: 0; border-radius: 15px;
+  background: transparent; color: var(--text-mute);
+  font: inherit; cursor: pointer;
+  transition: color .18s var(--ease), background-color .18s var(--ease);
+}
+.rail-btn em { font-style: normal; font-size: 10px; font-weight: 650; letter-spacing: .5px; }
+.rail-btn:active { transform: scale(.94); }
+.rail-btn.active { color: var(--accent); background: rgba(43,227,208,.09); }
+/* A hard-edged accent bar rather than a soft glow. */
+.rail-btn.active::before {
+  content: ""; position: absolute; left: -8px; top: 16px; bottom: 16px;
+  width: 3px; border-radius: 0 3px 3px 0; background: var(--accent);
+}
+.rail-btn.alert { color: var(--warn); }
+
+/* =============================================================== content == */
+
+.content {
+  grid-area: content;
+  overflow-y: auto; overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  padding: 14px var(--pad-x) 22px;
+}
+.content::-webkit-scrollbar { width: 0; }
+
+.page { display: none; }
+.app[data-page="home"]  .page[data-page="home"],
+.app[data-page="media"] .page[data-page="media"],
+.app[data-page="game"]  .page[data-page="game"],
+.app[data-page="voice"] .page[data-page="voice"],
+.app[data-page="perf"]  .page[data-page="perf"],
+.app[data-page="apps"]  .page[data-page="apps"],
+.app[data-page="quick"] .page[data-page="quick"] { display: block; }
+
+.stack { display: flex; flex-direction: column; gap: 14px; }
+.row { display: grid; gap: 14px; }
+.row.two { grid-template-columns: 1.32fr 1fr; }
+.row.even { grid-template-columns: 1fr 1fr; }
+
+/* Home is one persistent grid. Which card leads is expressed purely through
+   `order` and a `hero` class, so a context change (music starts, a game launches)
+   re-lays-out without moving, destroying or recreating a single DOM node. */
+.home-grid {
+  display: grid;
+  grid-template-columns: 1.32fr 1fr;
+  gap: 14px;
+  align-items: start;
+}
+.home-grid > .slot { min-width: 0; }
+.home-grid > .slot.hero,
+.home-grid > .slot.full { grid-column: 1 / -1; }
+/* Collapse rather than unmount, so the node keeps its state and listeners. */
+.home-grid > .slot.gone { display: none; }
+
+/* ================================================================= cards == */
+
+.card {
+  position: relative; overflow: hidden;
+  background: linear-gradient(176deg, var(--surface-2) 0%, #0D111C 100%);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 15px 16px;
+  /* Nothing inside a card paints outside it, so tell the browser that and keep any
+     invalidation from propagating up into the page. */
+  contain: paint;
+}
+/* Thin light-catch along the top edge - the main "premium" cue, costs one gradient. */
+.card::before {
+  content: ""; position: absolute; left: 14px; right: 14px; top: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.16), transparent);
+}
+.card.flush { padding: 0; }
+
+.card-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 12px;
+}
+.card-title {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 11.5px; line-height: 16px; font-weight: 700; letter-spacing: 1.1px; text-transform: uppercase;
+  color: var(--text-mute);
+}
+.card-title .ic { width: 15px; height: 15px; }
+
+/* ============================================================ now playing == */
+
+.np { display: grid; grid-template-columns: var(--art) 1fr; gap: 16px; align-items: center; }
+
+.np-art {
+  width: var(--art); height: var(--art); border-radius: 15px; overflow: hidden;
+  background: var(--surface-3);
+  display: grid; place-items: center;
+  border: 1px solid var(--line);
+}
+.np-art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.np-art .ic { width: 40px; height: 40px; color: var(--text-mute); }
+
+.np-body { min-width: 0; display: flex; flex-direction: column; gap: 9px; }
+
+.np-title {
+  font-size: 21px; font-weight: 700; letter-spacing: -.2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.np-sub {
+  font-size: 14px; color: var(--text-dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.np-meta { display: flex; align-items: center; gap: 8px; }
+
+/* Seek bar. The hit area is 40px tall while the visible track stays 6px, so it is
+   comfortably draggable with a thumb without a fat-looking bar. */
+.seek { position: relative; height: 40px; display: flex; align-items: center; cursor: pointer; touch-action: none; }
+.seek-track { position: relative; height: 6px; width: 100%; border-radius: 3px; background: var(--surface-3); }
+
+/* Grab handle. The knob rides a rail that spans the whole track, because a percentage
+   translate resolves against the element's own width - translating the 14px knob by 55%
+   would move it 8px, not 55% of the bar. Translating the full-width rail instead makes
+   the percentage mean what it should, and keeps the movement on the compositor. */
+.seek-rail {
+  position: absolute; inset: 0; pointer-events: none;
+  transform: translateX(0);
+  transition: transform 500ms linear;
+  will-change: transform;
+}
+.seek-knob {
+  position: absolute; top: 50%; left: 0; width: 14px; height: 14px; margin: -7px 0 0 -7px;
+  border-radius: 50%; background: var(--accent);
+  transition: scale .15s var(--ease);
+}
+.seek.dragging .seek-knob { scale: 1.4; }
+.seek.dragging .seek-fill,
+.seek.dragging .seek-rail { transition: none; }
+.seek-fill {
+  position: absolute; inset: 0; border-radius: 3px;
+  background: linear-gradient(90deg, var(--accent-deep), var(--accent));
+  transform-origin: left center; transform: scaleX(0);
+  /* scaleX keeps this on the compositor instead of relayouting every frame. The 500ms
+     linear glide matches the position ticker, so the bar creeps forward smoothly rather
+     than stepping twice a second. will-change forces its own layer, so this continuous
+     animation never dirties the media card behind it. */
+  transition: transform 500ms linear;
+  will-change: transform;
+}
+.seek-times {
+  display: flex; justify-content: space-between;
+  font-size: 11.5px; line-height: 16px; color: var(--text-mute); font-variant-numeric: tabular-nums;
+  margin-top: -4px;
+}
+
+/* Transport row: buttons at natural width, the source's own volume expanding into the
+   space that was previously empty, and the app badge pinned to the end. */
+.np-controls { display: flex; align-items: center; gap: 10px; }
+.np-vol { flex: 1 1 auto; min-width: 110px; }
+.np-vol .slider-row { margin: 0; }
+
+/* The Media tab is a dedicated page, so it gets a genuinely larger player rather than a
+   copy of the compact card that sits on the dashboard. */
+.np.full { grid-template-columns: var(--art-full) 1fr; gap: 24px; }
+.np.full .np-art { width: var(--art-full); height: var(--art-full); border-radius: 18px; }
+.np.full .np-title { font-size: 30px; letter-spacing: -.5px; }
+.np.full .np-sub { font-size: 16px; }
+.np.full .np-body { gap: 14px; }
+.np.full .tbtn { width: 54px; height: 54px; }
+.np.full .tbtn.primary { width: 68px; height: 68px; border-radius: 21px; }
+.np.full .tbtn.primary .ic { width: 30px; height: 30px; }
+.np.full .seek-times { font-size: 13px; }
+
+.tbtn {
+  display: grid; place-items: center;
+  width: 46px; height: 46px; border-radius: 14px;
+  background: var(--surface-3); border: 1px solid var(--line);
+  color: var(--text); cursor: pointer;
+  transition: transform .12s var(--ease), background-color .18s var(--ease);
+}
+.tbtn:active { transform: scale(.9); }
+.tbtn[disabled] { opacity: .3; pointer-events: none; }
+.tbtn.primary {
+  width: 58px; height: 58px; border-radius: 18px;
+  background: linear-gradient(160deg, var(--accent), var(--accent-deep));
+  border-color: transparent; color: #04120F;
+}
+.tbtn.primary .ic { width: 26px; height: 26px; }
+.tbtn.on { color: var(--accent); border-color: rgba(43,227,208,.42); }
+
+/* The application's own volume, sitting with the transport controls. */
+.np-vol { margin-top: 6px; }
+.slider-row.compact { grid-template-columns: 34px 1fr 42px; }
+.slider-row.compact .icon-btn { width: 34px; height: 34px; }
+.slider-row.compact .range { height: 34px; }
+
+.seek.disabled { opacity: .45; pointer-events: none; }
+
+.src-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.src-tab {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 34px; padding: 0 13px; border-radius: 11px;
+  background: var(--surface-1); border: 1px solid var(--line);
+  color: var(--text-dim); font-size: 12.5px; font-weight: 600; cursor: pointer;
+}
+.src-tab.active { color: var(--accent); border-color: rgba(43,227,208,.42); background: rgba(43,227,208,.08); }
+.src-tab .pip { width: 6px; height: 6px; border-radius: 50%; background: var(--good); }
+
+/* ================================================================ gauges == */
+
+/* Capped width so the three dials read as one instrument cluster instead of
+   drifting apart when this card is the full-width hero. */
+.gauges { display: flex; gap: 18px; max-width: 420px; }
+
+/* Only the percentage lives inside the ring. The caption and the secondary reading sit
+   underneath, because stacking three lines inside a 64px inner circle is what made these
+   look cramped and made long values like "10.7/16G" collide with the stroke. */
+.gauge { display: flex; flex-direction: column; align-items: center; gap: 5px; width: 104px; flex: none; }
+
+/* The dial is the only thing on screen repainting continuously. `contain: strict` bounds
+   the dirty region to these 96 square pixels, and the layer promotion keeps the repaint
+   off the card behind it. Without this the stroke animation was dirtying far more of the
+   page than it needed to, which is what made the performance tab drop frames. */
+.dial {
+  position: relative; width: 96px; height: 96px;
+  contain: strict;
+  will-change: transform;
+  transform: translateZ(0);
+}
+.dial svg { width: 96px; height: 96px; transform: rotate(-90deg); display: block; }
+.dial circle { fill: none; stroke-width: 8; stroke-linecap: round; }
+.dial .bg { stroke: var(--surface-3); }
+/*
+ * The sweep settles quickly and then rests, rather than gliding for the whole publish interval.
+ * This duration is a performance decision, not a taste one.
+ */
+.dial .fg {
+  stroke: var(--accent);
+  transition: stroke-dashoffset 220ms var(--ease), stroke 1.5s var(--ease);
+}
+/* The reading is one value, so the number and its percent sign share a single line box:
+   they sit on a common baseline and are centred together. Laying them out as two flex
+   items instead meant the sign had to be given zero width and lifted with a transform to
+   stop it dragging the digits off-centre, which made it read as a superscript pinned to
+   the upper right rather than as part of the value. `line-height` equal to the dial's own
+   height is what centres that line box vertically, so no vertical nudging is needed. */
+.dial .lbl {
+  position: absolute; inset: 0;
+  text-align: center; line-height: 96px; white-space: nowrap;
+}
+.dial .n {
+  font-size: 27px; font-weight: 700; letter-spacing: -1px;
+  /* Tabular figures stop the number jittering sideways as digits change, so 9 -> 10 -> 100
+     never nudges the layout. */
+  font-variant-numeric: tabular-nums;
+}
+.dial .pct {
+  font-size: 12px; font-weight: 600; color: var(--text-mute);
+  margin-left: 1px; letter-spacing: 0;
+}
+
+.gauge .cap {
+  font-size: 10px; line-height: 13px; font-weight: 700; letter-spacing: 1px;
+  text-transform: uppercase; color: var(--text-mute);
+}
+
+/*
+ * Temperature as a track, not just a number. The degrees stay - a bar cannot tell you it is 84 -
+ * but the track is what makes a glance enough, and it is what turns "some number" into "near the
+ * top of its range".
+ */
+.gauge .temp {
+  width: 72px; height: 3px; border-radius: 2px;
+  background: var(--surface-3); overflow: hidden;
+}
+.gauge .temp.none { visibility: hidden; }
+/* Reserved height so the row never shifts when a temperature appears or drops out. */
+.gauge .sub {
+  font-size: 11px; color: var(--text-dim); font-variant-numeric: tabular-nums;
+  min-height: 14px; line-height: 14px; white-space: nowrap;
+}
+
+/* Compact readouts under the gauges */
+.stat-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(66px, 1fr)); gap: 8px; margin-top: 13px; }
+.stat {
+  background: var(--surface-1); border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm); padding: 8px 10px; min-width: 0;
+  /* The caption below is an inline span, so it sits in an anonymous line box whose strut
+     takes this element's line-height. Inheriting the root's 1.35 ratio made that strut
+     20.25px, which gave every tile a fractional height and pushed the whole second row of
+     the dashboard - the media and audio cards - a quarter of a pixel off the device grid,
+     smearing their 1px borders. An integer here keeps the grid whole. */
+  line-height: 20px;
+}
+.stat b {
+  display: block; font-size: 14.5px; line-height: 19px; font-weight: 700; font-variant-numeric: tabular-nums;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: color 1.2s var(--ease);
+}
+.stat span { font-size: 9.5px; line-height: 13px; font-weight: 650; letter-spacing: .7px; text-transform: uppercase; color: var(--text-mute); }
+.stat.warn b { color: var(--warn); }
+.stat.hot b { color: var(--danger); }
+
+/* A rotor sits on the value's own row rather than above the caption, so a tile that has
+   one keeps exactly the same two-line height as one that does not and the strip stays
+   flush. */
+.stat .val-row { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.stat .val-row b { min-width: 0; }
+
+/* The rotor takes width the number used to have, and in the dashboard's narrower System
+   card a tile is only 82px wide. At the strip's normal size a four-digit RPM landed exactly
+   flush against the available space - fine in a desktop preview, clipped to "20..." on the
+   tablet, where Roboto's digits are wider than the preview's Segoe UI. Sized down here so
+   the reading has real headroom on the device rather than passing only on the machine it
+   was designed on. */
+.stat.with-rotor .val-row b { font-size: 13.5px; }
+
+/* ---- fill bars ---------------------------------------------------------- */
+
+/*
+ * `transform: scaleX` rather than `width`. Width is a layout property: animating it would reflow
+ * the whole strip on every tick, which is precisely the class of mistake the dials were rewritten
+ * to avoid. A scale stays on the compositor.
+ */
+.stat .bar {
+  height: 3px; border-radius: 2px; background: var(--surface-3);
+  margin-top: 5px; overflow: hidden;
+}
+.gauge .temp i,
+.stat .bar i {
+  display: block; height: 100%; width: 100%;
+  transform-origin: left center; transform: scaleX(0);
+  background: var(--accent);
+  transition: transform 220ms var(--ease), background-color 1.5s var(--ease);
+}
+.gauge .temp i { background: var(--good); }
+.gauge .temp.warn i, .stat.warn .bar i { background: var(--warn); }
+.gauge .temp.hot i,  .stat.hot .bar i  { background: var(--danger); }
+
+/* ---- fan rotor ---------------------------------------------------------- */
+
+/*
+ * The only thing in this UI that animates continuously, and it is allowed to because `rotate` is
+ * a compositor transform: the layer is rasterised once and then reused every frame. That is the
+ * whole difference between this and the dials, whose `stroke-dashoffset` re-rasterises on the CPU
+ * and therefore has to settle and rest (see .dial .fg).
+ */
+.rotor {
+  width: 14px; height: 14px; flex: none;
+  fill: none; stroke: currentColor; stroke-width: 1.9;
+  stroke-linecap: round; stroke-linejoin: round;
+  color: var(--text-dim);
+  animation: rotor-spin var(--rotor-dur, 2s) linear infinite;
+  will-change: transform;
+  transition: color 1.2s var(--ease);
+}
+/* A stopped fan has to look stopped. A rotor still turning on a fan reading zero would be
+   reporting a speed the machine is not running. */
+.rotor.still { animation: none; color: var(--text-mute); }
+.rotor.fast { color: var(--warn); }
+.rotor.max  { color: var(--danger); }
+
+@keyframes rotor-spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .rotor { animation: none; }
+}
+
+/* FPS hero, shown while gaming */
+.fps-hero { display: flex; align-items: baseline; gap: 10px; }
+/* Reserved for three tabular digits so the "FPS" label beside it does not slide sideways
+   as the reading crosses 99 -> 100, or when there is no reading at all. */
+.fps-hero .n {
+  font-size: 54px; font-weight: 800; letter-spacing: -2px;
+  font-variant-numeric: tabular-nums; line-height: 54px;
+  display: inline-block; min-width: 3ch; position: relative;
+}
+/* No reading yet - PresentMon is on-demand, so a gaming session can legitimately show the
+   hero before any frame timing has arrived. The placeholder is drawn by ::after rather
+   than written into the element, because an em dash set at 54px/800 paints as a solid
+   filled bar the size of the number and reads as a white rectangle rather than as "no
+   value". Keeping the element's own text empty also leaves its line box - and therefore
+   the baseline that "FPS" aligns to - exactly where a real number would put it. */
+/* Centred in the reserved slot, not pinned to its left edge: a dash sitting 90px away
+   from the "FPS" it belongs to read as two unrelated fragments rather than one value. */
+.fps-hero .n.waiting::after {
+  content: "–";
+  position: absolute; left: 0; right: 0; bottom: 9px; text-align: center;
+  font-size: 20px; font-weight: 600; letter-spacing: 0; color: var(--text-mute);
+}
+.fps-hero .u { font-size: 13px; font-weight: 700; color: var(--text-mute); letter-spacing: 1px; }
+.fps-hero .low { margin-left: auto; text-align: right; }
+.fps-hero .low b { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 22px; }
+.fps-hero .low b.waiting { color: var(--text-mute); font-weight: 600; }
+.fps-hero .low span { display: block; font-size: 9.5px; line-height: 13px; letter-spacing: .8px; text-transform: uppercase; color: var(--text-mute); }
+
+/* ================================================================ sliders == */
+
+.slider-row { display: grid; grid-template-columns: 40px 1fr 46px; align-items: center; gap: 10px; }
+.slider-row + .slider-row { margin-top: 4px; }
+
+.icon-btn {
+  display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px;
+  background: transparent; border: 1px solid transparent; color: var(--text-dim); cursor: pointer;
+}
+.icon-btn:active { transform: scale(.92); }
+.icon-btn.muted { color: var(--danger); }
+
+/* touch-action: none is essential, not cosmetic. Without it the browser keeps the gesture
+   as a candidate scroll, and once it commits to scrolling it fires pointercancel and stops
+   delivering pointermove - so a drag registered only its first position and the slider
+   appeared to jump backwards to wherever the finger landed. */
+.range {
+  position: relative; height: 40px; display: flex; align-items: center; cursor: pointer;
+  touch-action: none;
+}
+.range-track { position: relative; width: 100%; height: 10px; border-radius: 5px; background: var(--surface-3); overflow: hidden; }
+
+/* The handle. There was none, so there was nothing to aim at and no read of the current
+   value except the edge of the fill - which sits under the finger the moment you touch it.
+   Sized to be grabbable rather than decorative. */
+.range-thumb {
+  position: absolute; top: 50%; left: 0;
+  width: 20px; height: 20px; margin: -10px 0 0 -10px;
+  border-radius: 50%;
+  background: var(--text); border: 2px solid var(--surface-1);
+  box-shadow: 0 1px 3px rgba(0,0,0,.5);
+  pointer-events: none;
+  transition: transform .12s var(--ease), background-color .18s var(--ease);
+}
+/* Grown while held so the handle is still readable with a finger on it. */
+.range.grabbing .range-thumb { transform: scale(1.25); background: var(--accent); }
+/* Fine mode has to announce itself, or a slider that suddenly moves at a third speed reads
+   as a stuck control rather than a deliberate one. */
+.range.fine .range-thumb { transform: scale(1.45); box-shadow: 0 0 0 4px rgba(43,227,208,.22), 0 1px 3px rgba(0,0,0,.5); }
+.range.fine + .range-val::after { content: " fine"; font-size: 9px; letter-spacing: .5px; opacity: .75; }
+.range.dim .range-thumb { background: var(--text-mute); }
+/* The value is the only part of the row a finger never covers, so it carries the feedback. */
+.range.grabbing + .range-val { color: var(--accent); }
+.range-fill {
+  position: absolute; inset: 0; border-radius: 4px;
+  background: linear-gradient(90deg, var(--accent-deep), var(--accent));
+  transform-origin: left center; transform: scaleX(0);
+}
+.range.dim .range-fill { background: var(--surface-3); }
+.range-val { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; color: var(--text-dim); }
+
+/* app mixer rows */
+.mix-row { display: grid; grid-template-columns: 34px 1fr; gap: 11px; align-items: center; padding: 7px 0; }
+.mix-row + .mix-row { border-top: 1px solid var(--line-soft); }
+.mix-body { min-width: 0; }
+.mix-ico {
+  width: 34px; height: 34px; border-radius: 10px; overflow: hidden;
+  background: var(--surface-3); display: grid; place-items: center;
+  font-size: 14px; font-weight: 700; color: var(--text-dim);
+}
+.mix-ico img { width: 100%; height: 100%; object-fit: contain; }
+.mix-name { font-size: 13.5px; line-height: 18px; font-weight: 600; display: flex; align-items: center; gap: 7px; }
+.mix-name .live { width: 6px; height: 6px; border-radius: 50%; background: var(--good); flex: none; }
+
+/* device pills */
+.dev-list { display: flex; flex-direction: column; gap: 7px; }
+.dev {
+  display: flex; align-items: center; gap: 10px;
+  min-height: 46px; padding: 8px 12px; border-radius: 13px;
+  background: var(--surface-1); border: 1px solid var(--line);
+  cursor: pointer;
+}
+.dev.active { border-color: rgba(43,227,208,.45); background: rgba(43,227,208,.07); }
+.dev .nm { font-size: 13.5px; line-height: 18px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dev .tick { margin-left: auto; color: var(--accent); font-size: 15px; }
+
+/* ================================================================== apps == */
+
+.tile-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 11px; }
+
+.tile {
+  position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+  min-height: 96px; padding: 12px 8px; border-radius: 16px;
+  background: linear-gradient(170deg, var(--surface-2), #0D111C);
+  border: 1px solid var(--line); color: var(--text); cursor: pointer;
+  transition: transform .13s var(--ease);
+}
+.tile:active { transform: scale(.94); }
+.tile img { width: 42px; height: 42px; object-fit: contain; }
+.tile .ic { width: 26px; height: 26px; color: var(--text-dim); }
+.tile .nm {
+  font-size: 11.5px; font-weight: 650; text-align: center; line-height: 14px;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tile.running::after {
+  content: ""; position: absolute; top: 9px; right: 9px;
+  width: 7px; height: 7px; border-radius: 50%; background: var(--good);
+}
+
+/* "Starting" replaces the name rather than sitting beside it: the tile is already tight,
+   and while a launcher is cold this is the more useful of the two labels. */
+.tile .starting {
+  display: none;
+  font-size: 10.5px; line-height: 14px; font-weight: 700;
+  letter-spacing: .5px; color: var(--accent);
+}
+.tile.starting .nm { display: none; }
+.tile.starting .starting { display: block; }
+.tile.starting { border-color: rgba(43,227,208,.45); }
+/* Pinned marker, always visible so the ordering is explicable at a glance. */
+.tile .star {
+  position: absolute; top: 7px; left: 8px; width: 13px; height: 13px;
+  color: var(--warn); fill: currentColor; stroke: none;
+}
+
+/* Edit affordances, revealed only while the grid is in edit mode. */
+.tile .badges { position: absolute; inset: 0; display: none; }
+.tile-grid.editing .tile .badges { display: block; }
+.tile-grid.editing .tile { cursor: default; }
+.tile .badges .mini {
+  position: absolute; display: grid; place-items: center;
+  width: 30px; height: 30px; border-radius: 9px;
+  background: var(--surface-3); border: 1px solid var(--line); color: var(--text-dim);
+}
+.tile .badges .mini .ic { width: 15px; height: 15px; }
+.tile .badges .b-fav { top: 5px; left: 5px; }
+.tile .badges .b-fav.on { color: var(--warn); border-color: rgba(255,176,32,.5); }
+.tile .badges .b-fav.on .ic { fill: currentColor; stroke: none; }
+.tile .badges .b-hide { top: 5px; right: 5px; }
+.tile.is-hidden { opacity: .42; }
+
+.tile.danger { border-color: rgba(255,85,102,.32); }
+.tile.danger .ic, .tile.danger .nm { color: var(--danger); }
+
+/* hold-to-confirm affordance for destructive actions */
+.tile .hold {
+  position: absolute; left: 0; bottom: 0; height: 3px; width: 100%;
+  background: var(--danger); transform-origin: left center; transform: scaleX(0);
+}
+.tile.holding .hold { transform: scaleX(1); transition: transform 1.05s linear; }
+
+/* ============================================================== voice == */
+
+/* A live cast is sending the microphone somewhere it does not normally go, so the card
+   says so at a glance rather than only in a label. */
+.cast-card.live { border-color: rgba(43,227,208,.42); }
+
+.cast-toggle {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 30px; padding: 0 14px; border-radius: 999px;
+  background: var(--surface-1); border: 1px solid var(--line);
+  color: var(--text-dim); font: inherit; font-size: 12px; font-weight: 650;
+  letter-spacing: .4px; text-transform: uppercase; cursor: pointer;
+  transition: transform .12s var(--ease), color .18s var(--ease), border-color .18s var(--ease);
+}
+.cast-toggle:active { transform: scale(.95); }
+.cast-toggle .dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--text-mute); transition: background .25s var(--ease);
+}
+.cast-toggle.on { color: var(--accent); border-color: rgba(43,227,208,.5); background: rgba(43,227,208,.08); }
+.cast-toggle.on .dot { background: var(--accent); box-shadow: 0 0 8px rgba(43,227,208,.9); }
+
+.meter-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.mt-cap {
+  width: 58px; flex: none;
+  font-size: 9.5px; line-height: 13px; font-weight: 650; letter-spacing: .7px;
+  text-transform: uppercase; color: var(--text-mute);
+}
+.meter {
+  flex: 1; height: 6px; border-radius: 3px;
+  background: var(--surface-3); overflow: hidden;
+}
+/* `scaleX` again, and no transition on the way down.
+
+   A level meter is the one thing here that must not be smoothed: easing it would show a
+   signal that has already stopped, which is precisely the lie this meter exists to catch.
+   The short rise is only to stop single-frame peaks flickering. */
+.meter i {
+  display: block; height: 100%; width: 100%;
+  transform-origin: left center; transform: scaleX(0);
+  background: linear-gradient(90deg, var(--good) 0%, var(--good) 62%, var(--warn) 84%, var(--danger) 100%);
+  transition: transform 90ms linear;
+}
+
+/* Source pickers. Native selects: the tablet's own list is easier to hit than anything
+   drawn here, and the number of endpoints is unknown - a custom scrolling list would cost
+   more of the page than the rest of this card. */
+.src-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+.src-pick { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.src-pick > span {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 9.5px; line-height: 13px; font-weight: 650; letter-spacing: .7px;
+  text-transform: uppercase; color: var(--text-mute);
+}
+.src-pick .ic { width: 14px; height: 14px; }
+.src-pick select {
+  width: 100%; height: 34px; padding: 0 10px;
+  background: var(--surface-1); border: 1px solid var(--line);
+  border-radius: 10px; color: var(--text); font: inherit; font-size: 12.5px;
+  -webkit-appearance: none; appearance: none;
+}
+
+.cast-levels { margin-top: 14px; }
+
+/* ---- recorder ----------------------------------------------------------- */
+
+.rec-actions { display: flex; align-items: center; gap: 9px; margin-top: 13px; }
+.rec-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 38px; padding: 0 15px; border-radius: 11px;
+  background: var(--surface-1); border: 1px solid var(--line);
+  color: var(--text-dim); font: inherit; font-size: 12.5px; font-weight: 650; cursor: pointer;
+  transition: transform .12s var(--ease), color .18s var(--ease), border-color .18s var(--ease);
+}
+.rec-btn .ic { width: 16px; height: 16px; }
+.rec-btn:active { transform: scale(.95); }
+.rec-btn.on { color: var(--danger); border-color: rgba(255,85,102,.5); background: rgba(255,85,102,.08); }
+/* A disabled control has to look unavailable, or the only feedback is a command that
+   quietly fails on the laptop. */
+.rec-btn:disabled { opacity: .38; pointer-events: none; }
+.rec-buf {
+  width: 42px; flex: none; text-align: right;
+  font-size: 11.5px; line-height: 16px; color: var(--text-dim); font-variant-numeric: tabular-nums;
+}
+
+/* ---- soundboard --------------------------------------------------------- */
+
+.pad-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 9px; }
+.pad {
+  position: relative; overflow: hidden;
+  display: flex; flex-direction: column; align-items: flex-start; justify-content: space-between; gap: 7px;
+  min-height: 62px; padding: 10px 11px; border-radius: var(--radius-sm);
+  background: var(--surface-1); border: 1px solid var(--line);
+  color: var(--text); font: inherit; text-align: left; cursor: pointer;
+  transition: transform .12s var(--ease), border-color .18s var(--ease);
+}
+.pad:active { transform: scale(.96); }
+.pad-nm {
+  font-size: 13px; line-height: 18px; font-weight: 650;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
+}
+.pad-meta {
+  display: flex; align-items: baseline; gap: 8px;
+  font-size: 10px; line-height: 14px; color: var(--text-mute);
+}
+.pad-len { font-weight: 650; font-variant-numeric: tabular-nums; }
+.pad-route { letter-spacing: .5px; text-transform: uppercase; }
+.pad.playing { border-color: rgba(43,227,208,.55); }
+.pad.playing .pad-nm { color: var(--accent); }
+.pad.broken .pad-nm { color: var(--text-mute); }
+/* The same hold affordance as everywhere else, so a long press reads as a long press. */
+.pad.holding::after {
+  content: ""; position: absolute; left: 0; bottom: 0; height: 3px; width: 100%;
+  background: var(--accent); transform-origin: left center;
+  transform: scaleX(1); transition: transform .65s linear;
+}
+.cast-note {
+  margin-top: 10px; min-height: 16px;
+  font-size: 11.5px; line-height: 16px; color: var(--text-mute);
+}
+.cast-note.bad { color: var(--warn); }
+
+/* ======================================================== running apps == */
+
+.run-list { display: flex; flex-direction: column; gap: 6px; }
+.run-head {
+  margin: 13px 0 7px;
+  font-size: 9.5px; line-height: 13px; font-weight: 650; letter-spacing: .8px;
+  text-transform: uppercase; color: var(--text-mute);
+}
+.run-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 8px 7px 11px; min-width: 0;
+  background: var(--surface-1); border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  /* Integer, for the same reason the stat tiles carry one: a fractional row height in a
+     list this long walks the whole card off the device pixel grid. */
+  line-height: 20px;
+}
+.run-txt { display: flex; align-items: baseline; gap: 9px; min-width: 0; flex: 1; }
+.run-nm {
+  font-size: 13px; line-height: 18px; font-weight: 650; white-space: nowrap;
+}
+/* The title is what actually identifies a window - "chrome" does not, with four open - but
+   it is the part that must give way when the row is too narrow. */
+.run-ttl {
+  font-size: 11.5px; line-height: 16px; color: var(--text-mute);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.run-mem {
+  font-size: 11.5px; line-height: 16px; color: var(--text-dim);
+  font-variant-numeric: tabular-nums; white-space: nowrap; flex: none;
+}
+.run-x {
+  position: relative; overflow: hidden; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  width: 34px; height: 30px; border-radius: 9px;
+  background: transparent; border: 1px solid var(--line);
+  color: var(--text-dim); cursor: pointer;
+  transition: transform .12s var(--ease), color .18s var(--ease), border-color .18s var(--ease);
+}
+.run-x .ic { width: 15px; height: 15px; }
+.run-x:active { transform: scale(.92); }
+/* Same affordance as the destructive tiles on the Actions page: the bar fills for the
+   duration of the hold, so the escalation from "close" to "end" is visible while it is
+   happening rather than announced after the fact. */
+.run-x .hold {
+  position: absolute; left: 0; bottom: 0; height: 3px; width: 100%;
+  background: var(--danger); transform-origin: left center; transform: scaleX(0);
+}
+.run-x.holding { color: var(--danger); border-color: rgba(255,85,102,.5); }
+.run-x.holding .hold { transform: scaleX(1); transition: transform 1.05s linear; }
+
+/* ================================================================ states == */
+
+/* ======================================================== media sources == */
+
+/* The idle media card. Rather than centring a "nothing playing" message in a large card,
+   the space carries the shortcuts that would otherwise mean picking up the laptop. */
+.np-empty-head {
+  display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.np-empty-head .lead { font-size: 15px; line-height: 20px; font-weight: 650; color: var(--text-dim); }
+.np-empty-head .hint { font-size: 11.5px; line-height: 16px; color: var(--text-mute); }
+
+/* Source tiles are shorter than app tiles: this grid sits inside a card that also has to
+   fit the player when something starts, so it should not set the card's height. */
+.tile-grid.sources { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; }
+.src-tile { min-height: 78px; gap: 7px; padding: 10px 8px; }
+.src-tile img { width: 32px; height: 32px; }
+.src-tile .ic { width: 22px; height: 22px; }
+
+/* ============================================================ game page == */
+
+/* Quick chat. These are the biggest touch targets in the app on purpose: they get pressed
+   mid-match, without looking, on a tablet sitting beside the keyboard. */
+.chat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 11px; }
+
+.chat-btn {
+  position: relative; text-align: left;
+  display: flex; flex-direction: column; justify-content: center; gap: 4px;
+  min-height: 68px; padding: 12px 46px 12px 15px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(170deg, var(--surface-2), #0D111C);
+  border: 1px solid var(--line); color: var(--text);
+  font: inherit; cursor: pointer;
+  transition: transform .12s var(--ease), border-color .18s var(--ease);
+}
+.chat-btn:active { transform: scale(.97); }
+.chat-btn .ph { font-size: 15px; line-height: 20px; font-weight: 650; }
+/* The key pair is the thing to trust when a label is wrong: the game resolves the slot,
+   not us, so showing the actual keystroke makes a mismatch obvious instead of mysterious. */
+.chat-btn .combo {
+  font-size: 11px; line-height: 15px; font-weight: 700; letter-spacing: 1px;
+  color: var(--text-mute); font-variant-numeric: tabular-nums;
+}
+.chat-btn.looping { border-color: rgba(255,176,32,.55); }
+.chat-btn.looping .combo { color: var(--warn); }
+
+/* The loop badge is a separate hit target inside the button: tap the button to send once,
+   tap the badge to start repeating. */
+.chat-btn .rep {
+  position: absolute; top: 0; right: 0; bottom: 0; width: 44px;
+  display: grid; place-items: center;
+  color: var(--text-mute); border-left: 1px solid var(--line-soft);
+}
+.chat-btn .rep .ic { width: 17px; height: 17px; }
+.chat-btn.looping .rep { color: var(--warn); }
+
+/* Deliberately loud, and always visible while a repeat is live. */
+.repeat-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin-top: 12px; padding: 9px 10px 9px 14px;
+  border-radius: var(--radius-sm);
+  background: rgba(255,176,32,.10); border: 1px solid rgba(255,176,32,.45);
+}
+.rp-text { font-size: 13px; line-height: 18px; font-weight: 600; color: var(--warn); }
+.rp-stop {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 34px; padding: 0 14px; border-radius: 10px;
+  background: var(--danger); border: 0; color: #fff;
+  font: inherit; font-size: 13px; font-weight: 700; cursor: pointer;
+}
+.rp-stop .ic { width: 13px; height: 13px; }
+.rp-stop:active { transform: scale(.95); }
+
+/* Shortcut tiles reuse the media-source tile, plus a chord hint underneath. */
+.shortcut-grid .hint {
+  font-size: 9.5px; line-height: 13px; letter-spacing: .6px; text-transform: uppercase;
+  color: var(--text-mute); font-variant-numeric: tabular-nums;
+}
+/* Works only inside a Steam-launched game - dimmed so it reads as conditional, not broken. */
+.src-tile.conditional { opacity: .62; }
+
+/* Compact profile switch in the System card header, on the dashboard and the perf page.
+   Sized as a segmented control rather than three separate chips so it reads as one
+   three-state setting, and stays a comfortable touch target at 28px tall. */
+.mode-mini {
+  display: flex; gap: 3px; padding: 3px;
+  border-radius: 999px; background: var(--surface-1); border: 1px solid var(--line-soft);
+}
+.mm-btn {
+  height: 28px; padding: 0 13px; border-radius: 999px;
+  background: transparent; border: 0; color: var(--text-mute);
+  font: inherit; font-size: 11px; line-height: 16px; font-weight: 700;
+  letter-spacing: .6px; text-transform: uppercase; white-space: nowrap; cursor: pointer;
+  transition: color .18s var(--ease), background-color .18s var(--ease);
+}
+.mm-btn:active { transform: scale(.94); }
+.mm-btn.on { color: var(--bg); background: var(--accent); }
+
+/* Performance mode */
+.mode-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+.mode-btn {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  min-height: 72px; border-radius: var(--radius-sm);
+  background: var(--surface-1); border: 1px solid var(--line);
+  color: var(--text-dim); font: inherit; font-size: 12px; font-weight: 650; cursor: pointer;
+  transition: transform .12s var(--ease), border-color .18s var(--ease), color .18s var(--ease);
+}
+.mode-btn:active { transform: scale(.95); }
+.mode-btn.on { color: var(--accent); border-color: rgba(43,227,208,.5); background: rgba(43,227,208,.08); }
+.mode-note {
+  margin-top: 10px; min-height: 16px;
+  font-size: 11.5px; line-height: 16px; color: var(--text-mute); text-transform: capitalize;
+}
+/* A two-column row that has lost one of its cards to an unsupported capability. */
+.row.two.one, .row.even.one { grid-template-columns: 1fr; }
+
+/* Keyboard backlight shares the performance card rather than taking one of its own: it is the
+   same family of machine state as the thermal profile, and at 1024x600 there is no room
+   for another card on this row. Laid out as a single line so it reads as a subordinate
+   setting rather than competing with the three mode tiles above it. */
+.kbd-row {
+  display: flex; align-items: center; gap: 10px;
+  margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line-soft);
+}
+.kbd-lbl {
+  display: flex; align-items: center; gap: 7px; margin-right: auto;
+  font-size: 11.5px; line-height: 16px; font-weight: 650; color: var(--text-mute);
+}
+.kbd-lbl .ic { width: 16px; height: 16px; }
+.kbd-btns { display: flex; gap: 6px; }
+.kbd-btn {
+  min-width: 52px; padding: 6px 10px; border-radius: 9px;
+  background: var(--surface-1); border: 1px solid var(--line);
+  color: var(--text-dim); font: inherit; font-size: 11.5px; line-height: 16px;
+  font-weight: 650; cursor: pointer;
+  transition: transform .12s var(--ease), border-color .18s var(--ease), color .18s var(--ease);
+}
+.kbd-btn:active { transform: scale(.94); }
+.kbd-btn.on { color: var(--accent); border-color: rgba(43,227,208,.5); background: rgba(43,227,208,.08); }
+
+.empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px;
+  padding: 26px 16px; color: var(--text-mute); text-align: center;
+}
+.empty .ic { width: 26px; height: 26px; opacity: .6; }
+.empty p { margin: 0; font-size: 13px; }
+
+/* ================================================================== veil == */
+
+.veil {
+  position: fixed; inset: 0; z-index: 50;
+  display: grid; place-items: center;
+  background: var(--bg);
+  opacity: 0; pointer-events: none;
+  transition: opacity .3s var(--ease);
+}
+.veil.show { opacity: 1; pointer-events: auto; }
+.veil-inner { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 0 40px; }
+.veil h2 { margin: 0; font-size: 20px; font-weight: 700; }
+.veil p { margin: 0; font-size: 13.5px; line-height: 19px; color: var(--text-dim); max-width: 420px; }
+
+.veil-pulse {
+  width: 46px; height: 46px; border-radius: 50%;
+  border: 2px solid var(--accent); margin-bottom: 4px;
+  animation: pulse 1.9s var(--ease) infinite;
+}
+@keyframes pulse {
+  0%   { transform: scale(.72); opacity: .9; }
+  70%  { transform: scale(1.28); opacity: 0; }
+  100% { transform: scale(1.28); opacity: 0; }
+}
+
+/* Entry motion, deliberately short - long transitions feel sluggish at 30fps. */
+.fade-in { animation: fadeIn .26s var(--ease) both; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+/* ============================================================ responsive == */
+
+/* The shell is a two-column grid with a fixed rail, and the content rows are
+   two-column grids tuned for ~1024dp. Everything below adapts those two facts;
+   the many `repeat(auto-fill, minmax(...))` grids elsewhere already adapt on their
+   own and are deliberately left alone. */
+
+/* Large tablet or a desktop browser. Cards stretched to 2000dp look thin and the
+   eye has to travel too far between a label and its value, so the content column
+   is capped and centred rather than letting the grid grow without limit. */
+@media (min-width: 1360px) {
+  :root { --pad-x: 22px; }
+  html, body { font-size: 16px; }
+  .content > .page { max-width: 1500px; margin: 0 auto; }
+}
+
+/* Small tablet, or a large phone held sideways. Two columns stop earning their
+   keep once each one is under about 380dp, so the rows go single-file. */
+@media (max-width: 900px) {
+  :root { --rail-w: 68px; --art: 112px; --art-full: 168px; }
+  .row.two, .row.even, .home-grid { grid-template-columns: 1fr; }
+  .home-grid > .slot.hero, .home-grid > .slot.full { grid-column: auto; }
+  .gauges { max-width: none; }
+}
+
+/* Phone in landscape. The rail keeps its icons and drops its labels - a 56dp
+   target is still comfortable, and the active-page accent bar carries the state. */
+@media (max-width: 720px) {
+  :root { --rail-w: 56px; --pad-x: 11px; --radius: 16px; --radius-sm: 11px; }
+  html, body { font-size: 14px; }
+  .rail-btn { height: 52px; }
+  .rail-btn em { display: none; }
+  .rail-btn.active::before { left: -6px; top: 12px; bottom: 12px; }
+  .card { padding: 12px 13px; }
+  .stack, .row, .home-grid { gap: 11px; }
+  .host { max-width: 140px; }
+  /* The art stays beside the text rather than stacking above it. Stacking makes it a
+     full-width square, which on the short screen this breakpoint targets fills the
+     viewport with an album cover and pushes the transport controls off-screen. */
+  :root { --art: 84px; --art-full: 110px; }
+}
+
+/* Short screens, which is every phone in landscape. Vertical rhythm is what runs
+   out first here, not width, so this trims heights rather than columns. */
+@media (max-height: 460px) {
+  :root { --top-h: 42px; --art: 92px; --art-full: 120px; }
+  .content { padding-top: 10px; padding-bottom: 14px; }
+  .card { padding: 11px 13px; }
+  .rail { padding: 6px 7px; gap: 2px; }
+  .rail-btn { height: 46px; }
+  .rail-btn em { display: none; }
+  .gauge { width: 84px; }
+  .stat-strip { margin-top: 9px; }
+}
+
+/* A mouse rather than a finger: give the controls hover feedback the touch build
+   has no use for, so the same page is pleasant to drive from a desktop browser. */
+@media (hover: hover) and (pointer: fine) {
+  .rail-btn:hover { color: var(--text-dim); background: rgba(255,255,255,.035); }
+  .rail-btn.active:hover { color: var(--accent); }
+  .tile:hover, .pad:hover, .mode-btn:hover, .kbd-btn:hover { border-color: var(--line); filter: brightness(1.14); }
+  .content::-webkit-scrollbar { width: 8px; }
+  .content::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 4px; }
+}
+
+/* ================================================================= setup == */
+
+/* The first-run guide, shown over the disconnected veil. It has to be readable at arm's
+   length by someone who has never seen it, so the type is larger than the dashboard's and
+   the current step is the only thing with any colour in it. */
+
+.veil.guiding .veil-inner { display: none; }
+
+.veil-link {
+  margin-top: 4px; padding: 7px 14px; border-radius: 999px;
+  background: transparent; border: 1px solid var(--line);
+  color: var(--text-dim); font: inherit; font-size: 12.5px; font-weight: 600;
+  cursor: pointer;
+}
+.veil-link:active { transform: scale(.96); }
+
+.setup {
+  width: min(560px, 92vw);
+  max-height: 92vh; overflow-y: auto;
+  padding: 22px 24px 18px;
+  background: var(--surface-2);
+  border: 1px solid var(--line); border-radius: var(--radius);
+}
+.setup::-webkit-scrollbar { width: 0; }
+.setup h2 { margin: 0 0 4px; font-size: 19px; font-weight: 700; }
+.setup-sub { margin: 0 0 16px; font-size: 13px; line-height: 18px; color: var(--text-dim); }
+
+.setup-steps { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+
+.step {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 12px 13px; border-radius: var(--radius-sm);
+  background: var(--surface-1); border: 1px solid transparent;
+}
+.step.next { border-color: rgba(43,227,208,.4); background: rgba(43,227,208,.06); }
+.step.done { opacity: .5; }
+
+/* The tick is a box until the step is done, then a filled check. Drawn in CSS rather than
+   as an icon so it can animate on the compositor when a step completes. */
+.step-tick {
+  flex: none; width: 19px; height: 19px; margin-top: 1px;
+  border-radius: 6px; border: 1.5px solid var(--line);
+  position: relative; transition: background-color .2s var(--ease), border-color .2s var(--ease);
+}
+.step.next .step-tick { border-color: var(--accent); }
+.step.done .step-tick { background: var(--good); border-color: var(--good); }
+.step.done .step-tick::after {
+  content: ""; position: absolute; left: 5.5px; top: 2px;
+  width: 4px; height: 9px; border: solid #06240F;
+  border-width: 0 2px 2px 0; transform: rotate(42deg);
+}
+
+.step-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.step-body b { font-size: 14px; font-weight: 650; }
+.step-body span { font-size: 12.5px; line-height: 17px; color: var(--text-dim); }
+.step-body i { font-style: normal; color: var(--text); font-weight: 600; }
+
+.step-go {
+  flex: none; align-self: center;
+  padding: 7px 14px; border-radius: 9px;
+  background: var(--surface-3); border: 1px solid var(--line);
+  color: var(--text); font: inherit; font-size: 12.5px; font-weight: 650;
+  cursor: pointer;
+}
+.step-go:active { transform: scale(.95); }
+.step.next .step-go { background: var(--accent); border-color: var(--accent); color: #042220; }
+.step.done .step-go { visibility: hidden; }
+
+.setup-alt {
+  margin: 16px 0 0; padding-top: 14px; border-top: 1px solid var(--line-soft);
+  font-size: 12.5px; line-height: 18px; color: var(--text-dim);
+}
+.setup-alt b { color: var(--text); }
+.setup-alt .step-go { margin-top: 9px; display: inline-block; }
+
+.setup-close {
+  display: block; margin: 16px auto 0; padding: 8px 20px; border-radius: 999px;
+  background: transparent; border: 1px solid var(--line);
+  color: var(--text-dim); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
+}
+
+/* Short screens: the guide is the only thing on them, so it may scroll. */
+@media (max-height: 460px) {
+  .setup { padding: 14px 16px 12px; }
+  .setup h2 { font-size: 16px; }
+  .setup-sub { margin-bottom: 10px; }
+  .step { padding: 9px 11px; }
+}

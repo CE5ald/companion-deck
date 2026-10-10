@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Companion Deck</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<!-- Icon sprite. Inlined so there is no second request and no flash of missing glyphs. -->
+<svg class="sprite" aria-hidden="true">
+  <defs>
+    <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V21a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/></symbol>
+    <symbol id="i-media" viewBox="0 0 24 24"><path d="M9 18V5l10-2v13"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/></symbol>
+    <symbol id="i-audio" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9zM17 8a5 5 0 0 1 0 8"/></symbol>
+    <symbol id="i-perf" viewBox="0 0 24 24"><path d="M3 17l5-6 4 4 5-8 4 5"/></symbol>
+    <symbol id="i-apps" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></symbol>
+    <symbol id="i-prev" viewBox="0 0 24 24"><path d="M18 5v14L8 12zM6 5h2v14H6z"/></symbol>
+    <symbol id="i-next" viewBox="0 0 24 24"><path d="M6 5v14l10-7zM16 5h2v14h-2z"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5 20 12 7 19.5z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6" y="4.5" width="4.5" height="15" rx="1"/><rect x="13.5" y="4.5" width="4.5" height="15" rx="1"/></symbol>
+    <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M16 4h5v5M21 4l-7.5 7.5M16 20h5v-5M21 20l-6-6M3 4l6 6M3 20l7.5-7.5"/></symbol>
+    <symbol id="i-repeat" viewBox="0 0 24 24"><path d="M17 2l4 4-4 4M21 6H7a4 4 0 0 0-4 4v1M7 22l-4-4 4-4M3 18h14a4 4 0 0 0 4-4v-1"/></symbol>
+    <!-- Sound-on carries waves. A bare cone reads as silent, which is what the muted glyph
+         is for - without them the on and off states were telling the same story. -->
+    <symbol id="i-vol" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16.4 9.8a3.2 3.2 0 0 1 0 4.4M19.3 7.4a7 7 0 0 1 0 9.2"/></symbol>
+    <symbol id="i-mute" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9zM17 9l5 6M22 9l-5 6"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v4"/></symbol>
+    <!-- A muted control must still look like the thing it mutes; the microphone row was
+         showing a crossed-out speaker, which claims the output is off instead. -->
+    <symbol id="i-mic-off" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v4M4 4l16 16"/></symbol>
+    <symbol id="i-out" viewBox="0 0 24 24"><path d="M3 8h4l5-4v16l-5-4H3zM16 8a6 6 0 0 1 0 8"/></symbol>
+    <symbol id="i-usb" viewBox="0 0 24 24"><path d="M12 22V6M12 6 9 9M12 6l3 3M8 14l-3 3v3M16 12l3 3v3"/><circle cx="12" cy="4" r="2"/></symbol>
+    <symbol id="i-wifi" viewBox="0 0 24 24"><path d="M2 8a16 16 0 0 1 20 0M5 12a11 11 0 0 1 14 0M8.5 15.5a6 6 0 0 1 7 0"/><circle cx="12" cy="19.5" r="1.4"/></symbol>
+    <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><path d="M3 9h11a5 5 0 0 1 0 10h-6M3 9l4-4M3 9l4 4"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4 20h4l10-10-4-4L4 16zM14 6l4 4"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M19.1 4.9l-1.8 1.8M6.7 17.3l-1.8 1.8"/></symbol>
+    <symbol id="i-chip" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2"/><path d="M10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+    <symbol id="i-game" viewBox="0 0 24 24"><path d="M7 12h4M9 10v4M15.5 11.5h.01M18 14h.01"/><path d="M6.5 7h11a4 4 0 0 1 3.9 3.1l1 4.4A3 3 0 0 1 19.5 18c-1.1 0-2-.6-2.6-1.5L16 15H8l-.9 1.5C6.5 17.4 5.6 18 4.5 18a3 3 0 0 1-2.9-3.5l1-4.4A4 4 0 0 1 6.5 7z"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H7l-4 3v-4.5A8 8 0 0 1 11 4h2a8 8 0 0 1 8 8z"/></symbol>
+    <symbol id="i-loop" viewBox="0 0 24 24"><path d="M17 2l4 4-4 4M21 6H7a4 4 0 0 0-4 4v1M7 22l-4-4 4-4M3 18h14a4 4 0 0 0 4-4v-1"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+    <symbol id="i-rec" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/></symbol>
+    <symbol id="i-leaf" viewBox="0 0 24 24"><path d="M20 4C10 4 4 9 4 16v4M20 4c0 9-5 13-11 13H4"/></symbol>
+    <symbol id="i-gauge" viewBox="0 0 24 24"><path d="M4 18a8 8 0 1 1 16 0"/><path d="M12 18l4-5"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></symbol>
+    <!-- Three identical blades at 120 degrees. Drawn as one path and rotated twice rather
+         than as three hand-drawn shapes, so the glyph is exactly rotationally symmetric -
+         any asymmetry reads as a wobble once this is actually spinning. -->
+    <symbol id="i-fan" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="2.1"/>
+      <path id="i-fan-blade" d="M12 9.9c0-3.3.9-5.9 2.8-6.7 1.7-.7 3.3.8 2.8 2.6-.5 1.9-2.7 3.4-5.6 4.1"/>
+      <use href="#i-fan-blade" transform="rotate(120 12 12)"/>
+      <use href="#i-fan-blade" transform="rotate(240 12 12)"/>
+    </symbol>
+    <symbol id="i-kbd" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8"/></symbol>
+    <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 2v6M15 2v6M6 8h12v2.5a6 6 0 0 1-12 0zM12 16.5V22"/></symbol>
+  </defs>
+</svg>
+
+<div id="app" class="app" data-page="home">
+
+  <!-- ---------------------------------------------------------- top bar -->
+  <header class="topbar">
+    <div class="tb-left">
+      <span id="linkDot" class="dot"></span>
+      <span id="hostName" class="host">Companion Deck</span>
+      <span id="transport" class="chip"><svg class="ic"><use href="#i-usb"/></svg><span id="transportText">–</span></span>
+    </div>
+    <div class="tb-right">
+      <span id="ctxBadge" class="chip ghost hidden"></span>
+      <span id="battery" class="chip ghost hidden"><span id="batText"></span><svg id="batBolt" class="ic solid bolt hidden"><use href="#i-bolt"/></svg><span id="batTag"></span></span>
+      <span id="clock" class="clock">--:--</span>
+    </div>
+  </header>
+
+  <!-- ------------------------------------------------------------- rail -->
+  <nav class="rail" id="rail">
+    <button class="rail-btn active" data-nav="home"  aria-label="Dashboard"><svg class="ic"><use href="#i-home"/></svg><em>Home</em></button>
+    <button class="rail-btn" data-nav="media" aria-label="Media and audio"><svg class="ic"><use href="#i-media"/></svg><em>Media</em></button>
+    <button class="rail-btn" data-nav="game"  aria-label="Gaming"><svg class="ic"><use href="#i-game"/></svg><em>Gaming</em></button>
+    <button class="rail-btn" data-nav="voice" aria-label="Voice and soundboard"><svg class="ic"><use href="#i-mic"/></svg><em>Voice</em></button>
+    <button class="rail-btn" data-nav="perf"  aria-label="Performance"><svg class="ic"><use href="#i-perf"/></svg><em>Perf</em></button>
+    <button class="rail-btn" data-nav="apps"  aria-label="Apps and games"><svg class="ic"><use href="#i-apps"/></svg><em>Apps</em></button>
+    <button class="rail-btn" data-nav="quick" aria-label="Quick actions"><svg class="ic"><use href="#i-bolt"/></svg><em>Actions</em></button>
+  </nav>
+
+  <!-- ------------------------------------------------------------- main -->
+  <main class="content" id="content">
+
+    <!-- HOME ------------------------------------------------------------->
+    <section class="page" data-page="home">
+      <div id="homeStack" class="stack"></div>
+    </section>
+
+    <!-- MEDIA + AUDIO ----------------------------------------------------
+         One page: what is playing, where to start playing, and every level and
+         device that carries it. They were split before, which meant adjusting the
+         volume of the track you were looking at was a different tab. -->
+    <section class="page" data-page="media">
+      <div id="mediaFull"></div>
+    </section>
+
+    <!-- GAMING ------------------------------------------------------------>
+    <section class="page" data-page="game">
+      <div id="gameFull"></div>
+    </section>
+
+    <!-- VOICE ------------------------------------------------------------
+         Casting what the laptop hears into the microphone input, plus the
+         soundboard and recorder that feed it. -->
+    <section class="page" data-page="voice">
+      <div id="voiceFull"></div>
+    </section>
+
+    <!-- PERF ------------------------------------------------------------->
+    <section class="page" data-page="perf">
+      <div id="perfFull"></div>
+    </section>
+
+    <!-- APPS ------------------------------------------------------------->
+    <section class="page" data-page="apps">
+      <div id="appsFull"></div>
+    </section>
+
+    <!-- QUICK ------------------------------------------------------------>
+    <section class="page" data-page="quick">
+      <div id="quickFull"></div>
+    </section>
+
+  </main>
+
+  <!-- ------------------------------------------------------- disconnected -->
+  <div id="veil" class="veil">
+    <div class="veil-inner">
+      <div class="veil-pulse"></div>
+      <h2 id="veilTitle">Looking for your laptop</h2>
+      <p id="veilBody">Plug in the USB cable, or make sure the Companion Deck host is running.</p>
+      <button id="veilHelp" class="veil-link">Not connecting? Set it up</button>
+    </div>
+
+    <!-- First-run guide. Each step ticks itself as the tablet's own settings change, so
+         nobody has to work out whether they did it right. -->
+    <div id="setup" class="setup" hidden>
+      <h2>One-time setup</h2>
+      <p class="setup-sub">Two settings on this tablet, once. After that the cable is all you need.</p>
+
+      <ol class="setup-steps">
+        <li class="step" data-step="dev">
+          <span class="step-tick"></span>
+          <div class="step-body">
+            <b>Turn on Developer options</b>
+            <span>Open About tablet and tap <i>Build number</i> seven times.</span>
+          </div>
+          <button class="step-go" data-open="about">Open</button>
+        </li>
+        <li class="step" data-step="adb">
+          <span class="step-tick"></span>
+          <div class="step-body">
+            <b>Turn on USB debugging</b>
+            <span>In Developer options. This is how the cable carries the link.</span>
+          </div>
+          <button class="step-go" data-open="dev">Open</button>
+        </li>
+        <li class="step" data-step="allow">
+          <span class="step-tick"></span>
+          <div class="step-body">
+            <b>Allow this computer</b>
+            <span>Plug the cable in and tap <i>Allow</i>, ticking <i>Always allow</i>.</span>
+          </div>
+        </li>
+      </ol>
+
+      <p class="setup-alt">
+        Would rather not use Developer options? Turn on <b>USB tethering</b> instead and the
+        app will find the laptop over the cable that way.
+        <button class="step-go" data-open="tether">Open tethering</button>
+      </p>
+
+      <button id="setupClose" class="setup-close">Back</button>
+    </div>
+  </div>
+
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -11,7 +11,35 @@ It was built to make a 2016 tablet with 1 GB of RAM useful again, so the whole t
 built around not wasting resources. The PC agent collects only what the tablet is
 currently showing, at the rate it asks for, and stops entirely when the screen goes off.
 
-![The dashboard](docs/images/dashboard.jpg)
+![The Companion Deck home screen: now playing with artwork, CPU, GPU and RAM dials, and the audio mixer](docs/images/home.png)
+
+## Screenshots
+
+Every page of the tablet UI, captured at 2x from the built-in demo data (no real machine appears
+in any of them). `node tools/capture-screenshots.js` regenerates them.
+
+<table>
+<tr>
+<td width="50%"><img src="docs/images/media.png" alt="Media page: full player with artwork, seek, shuffle and repeat, and one-tap sources"><br><b>Media</b><br>Full player with artwork, a draggable seek bar, and one-tap sources.</td>
+<td width="50%"><img src="docs/images/mixer.png" alt="Per-application volume mixer with output and input device switching"><br><b>Mixer</b><br>Per-app volume and mute, and output and input switching.</td>
+</tr>
+<tr>
+<td><img src="docs/images/voice.png" alt="Voice page: desktop audio streamed into the microphone, with live level meters and a rolling recorder"><br><b>Voice</b><br>Stream desktop audio into your microphone, with a rolling recorder.</td>
+<td><img src="docs/images/soundboard.png" alt="Soundboard with loudness-matched clips routed to speakers, microphone or both"><br><b>Soundboard</b><br>Loudness-matched clips, routed to speakers, mic or both.</td>
+</tr>
+<tr>
+<td><img src="docs/images/performance.png" alt="Performance page: CPU, GPU and RAM dials, frame rate, fans and network"><br><b>Performance</b><br>Live dials, fans, network and frame rate, only where the hardware reports them.</td>
+<td><img src="docs/images/apps.png" alt="Running applications that can be closed or ended from the tablet"><br><b>Running apps</b><br>Tap closes an app politely; hold ends it.</td>
+</tr>
+<tr>
+<td><img src="docs/images/launcher.png" alt="Launcher for games and applications"><br><b>Launcher</b><br>Games and apps with their own artwork.</td>
+<td><img src="docs/images/actions.png" alt="Quick actions and display brightness"><br><b>Actions</b><br>Brightness and system shortcuts; destructive tiles must be held.</td>
+</tr>
+<tr>
+<td><img src="docs/images/setup.png" alt="First-run setup guide with steps that tick themselves"><br><b>First-run guide</b><br>Steps tick themselves as the tablet's own settings change.</td>
+<td><img src="docs/images/phone-landscape.png" alt="The same interface on a landscape phone"><br><b>Any screen</b><br>The same UI, reflowed for a landscape phone.</td>
+</tr>
+</table>
 
 ## What you need
 

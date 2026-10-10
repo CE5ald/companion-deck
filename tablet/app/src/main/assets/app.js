@@ -81,7 +81,10 @@ function mmss(sec) {
   return m + ':' + String(s).padStart(2, '0');
 }
 
-const artUrl = (key) => key ? `https://deck.local/asset/${key}` : null;
+/* Cover art for the browser preview, keyed like real artwork. Empty on a device, where every key
+   is a content hash served by the shell. */
+const DEMO_ART = {};
+const artUrl = (key) => (key ? DEMO_ART[key] || `https://deck.local/asset/${key}` : null);
 
 /* Zero-width space. Paints nothing, but still generates a line box - so an element using
    it keeps the height and baseline it would have had with real text in it, instead of
@@ -2322,35 +2325,54 @@ function installMockData() {
   // ?caps=-thermalMode,-gpu,-gpuDetail,-fans,-brightness,-micCast,-fps
   const drop = new URLSearchParams(location.search).get('caps');
   if (drop) for (const k of drop.split(',')) if (k.startsWith('-')) S.caps[k.slice(1)] = false;
+  // ?demo=live shows the voice tools mid-use, with the cast armed and the recorder buffering,
+  // which is how the page looks in practice and far more informative than a row of off switches.
+  const live = new URLSearchParams(location.search).get('demo') === 'live';
   S.cast = {
-    available: true, armed: false, micName: 'Microphone Array (Realtek(R) Audio)',
+    available: true, armed: live, micName: 'Microphone Array',
     micEnabled: true, desktopGain: 55, micGain: 100, desktopPeak: 0, micPeak: 0,
     outputs: [
-      { id: 'spk', name: 'Speakers (Realtek(R) Audio)', isDefault: true },
-      { id: 'hdmi', name: 'LG HDR 4K (NVIDIA High Definition Audio)', isDefault: false },
+      { id: 'spk', name: 'Speakers (Realtek Audio)', isDefault: true },
+      { id: 'hdmi', name: 'Monitor (HDMI Audio)', isDefault: false },
     ],
     inputs: [
-      { id: 'mica', name: 'Microphone Array (Realtek(R) Audio)', isDefault: true },
-      { id: 'usb', name: 'Blue Yeti', isDefault: false },
+      { id: 'mica', name: 'Microphone Array', isDefault: true },
+      { id: 'usb', name: 'USB Microphone', isDefault: false },
     ],
   };
   S.sb = {
     folder: 'C:\\Users\\you\\AppData\\Local\\CompanionDeck\\soundboard',
-    recorderArmed: false, recording: false, bufferedSeconds: 0, bufferCapacity: 60,
-    recordingSeconds: 0,
+    recorderArmed: live, recording: false, bufferedSeconds: live ? 48 : 0, bufferCapacity: 60,
+    recordingSeconds: 0, normalise: true,
     items: [
-      { id: 'a1', name: 'What a save', route: 'both', gain: 100, order: 0, seconds: 1.4 },
-      { id: 'a2', name: 'Bruh', route: 'mic', gain: 100, order: 1, seconds: 0.8 },
-      { id: 'a3', name: 'Airhorn', route: 'both', gain: 80, order: 2, seconds: 2.1 },
-      { id: 'a4', name: 'clip 2026-08-29 20-14-02', route: 'ears', gain: 100, order: 3, seconds: 30.0 },
+      { id: 'a1', name: 'Airhorn', route: 'both', gain: 80, order: 0, seconds: 2.1 },
+      { id: 'a2', name: 'Applause', route: 'both', gain: 100, order: 1, seconds: 4.6 },
+      { id: 'a3', name: 'Drum roll', route: 'mic', gain: 100, order: 2, seconds: 3.2 },
+      { id: 'a4', name: 'Sad trombone', route: 'both', gain: 90, order: 3, seconds: 2.8 },
+      { id: 'a5', name: 'Wow', route: 'mic', gain: 100, order: 4, seconds: 0.9 },
+      { id: 'a6', name: 'Rimshot', route: 'both', gain: 100, order: 5, seconds: 1.3 },
+      { id: 'a7', name: 'Crowd gasp', route: 'ears', gain: 100, order: 6, seconds: 1.8 },
+      { id: 'a8', name: 'clip 2026-10-03 21-14-02', route: 'ears', gain: 100, order: 7, seconds: 30.0 },
     ],
   };
+  // Launcher icons and game covers: a letter on a gradient. They stand in for the artwork the
+  // real app fetches from the PC, and are generic on purpose rather than imitations of a logo.
+  // Defined here, ahead of the first list that uses them.
+  const tile = (letter, a, b) => 'data:image/svg+xml;utf8,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120"><defs>' +
+    '<linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="' + a + '"/>' +
+    '<stop offset="1" stop-color="' + b + '"/></linearGradient></defs>' +
+    '<rect width="120" height="120" rx="26" fill="url(#g)"/>' +
+    '<text x="60" y="80" text-anchor="middle" font-family="Segoe UI,Roboto,sans-serif" ' +
+    'font-size="58" font-weight="700" fill="#fff">' + letter + '</text></svg>');
+  const art = (key, letter, a, b) => { DEMO_ART[key] = tile(letter, a, b); return key; };
+
   S.running = {
     items: [
-      { pid: 4120, name: 'brave', title: 'Companion Deck - 12 tabs', memoryMb: 1840, windowed: true },
-      { pid: 9284, name: 'Code', title: 'app.js - Companion Tab deck', memoryMb: 920, windowed: true },
-      { pid: 12096, name: 'Spotify', title: 'Empire Of The Sun', memoryMb: 310, windowed: true },
-      { pid: 3928, name: 'Teams', title: 'Microsoft Teams', memoryMb: 205, windowed: true },
+      { pid: 4120, name: 'Browser', title: 'Project plan - 12 tabs', memoryMb: 1840, windowed: true },
+      { pid: 9284, name: 'Code', title: 'main.rs - my-project', memoryMb: 920, windowed: true },
+      { pid: 12096, name: 'Spotify', title: 'Midnight Drive', memoryMb: 310, windowed: true },
+      { pid: 3928, name: 'Teams', title: 'Weekly sync', memoryMb: 205, windowed: true },
       { pid: 7710, name: 'SearchIndexer', title: null, memoryMb: 412, windowed: false },
       { pid: 6180, name: 'RuntimeBroker', title: null, memoryMb: 188, windowed: false },
       { pid: 5502, name: 'NVDisplay.Container', title: null, memoryMb: 141, windowed: false },
@@ -2358,49 +2380,67 @@ function installMockData() {
   };
   S.apps = {
     items: [
-      { id: 'game', name: 'Some Game', kind: 'game', running: true },
-      { id: 'ow', name: 'Overwatch 2', kind: 'game' },
-      { id: 'cs', name: 'Cities: Skylines', kind: 'game' },
-      { id: 'steam', name: 'Steam', kind: 'app' },
-      { id: 'epic', name: 'Epic Games', kind: 'app' },
-      { id: 'discord', name: 'Discord', kind: 'app' },
-      { id: 'brave', name: 'Brave', kind: 'app' },
-      { id: 'spotify', name: 'Spotify', kind: 'app' },
+      { id: 'game', name: 'Neon Drift', kind: 'game', running: true, iconKey: art('g-neon', 'N', '#ff4f8b', '#5a1a7a') },
+      { id: 'ow', name: 'Hollow Keep', kind: 'game', iconKey: art('g-keep', 'H', '#2be3d0', '#0b4a52') },
+      { id: 'cs', name: 'Starfall Tactics', kind: 'game', iconKey: art('g-star', 'S', '#7c5cff', '#241a5c') },
+      { id: 'steam', name: 'Steam', kind: 'app', iconKey: art('a-steam', 'S', '#3b6ea5', '#14243a') },
+      { id: 'epic', name: 'Epic Games', kind: 'app', iconKey: art('a-epic', 'E', '#4a5568', '#171b22') },
+      { id: 'discord', name: 'Discord', kind: 'app', iconKey: art('a-chat', 'D', '#6c7bff', '#262a6e') },
+      { id: 'brave', name: 'Browser', kind: 'app', iconKey: art('a-web', 'B', '#ff7a3d', '#7a2a0b') },
+      { id: 'spotify', name: 'Spotify', kind: 'app', iconKey: 'i-spotify' },
     ],
   };
   S.audio = {
-    masterVolume: 62, masterMuted: false, micVolume: 80, micMuted: true,
+    masterVolume: 62, masterMuted: false, micVolume: 80, micMuted: false,
     outputs: [
       { id: 'o1', name: 'Speakers (Realtek Audio)', isDefault: true },
-      { id: 'o2', name: 'Headphones (WH-1000XM4)', isDefault: false },
+      { id: 'o2', name: 'Headphones (Bluetooth)', isDefault: false },
       { id: 'o3', name: 'CABLE Input (VB-Audio Virtual Cable)', isDefault: false },
     ],
     inputs: [
       { id: 'i1', name: 'Microphone Array', isDefault: true },
-      { id: 'i2', name: 'Virtual Mic for AudioRelay', isDefault: false },
+      { id: 'i2', name: 'USB Microphone', isDefault: false },
     ],
     apps: [
       { id: 'spotify', name: 'Spotify', volume: 90, muted: false, active: true },
-      { id: 'somegame', name: 'Some Game', volume: 70, muted: false, active: true },
+      { id: 'somegame', name: 'Neon Drift', volume: 70, muted: false, active: true },
       { id: 'discord', name: 'Discord', volume: 55, muted: false, active: false },
-      { id: 'brave', name: 'Brave', volume: 100, muted: true, active: false },
+      { id: 'brave', name: 'Browser', volume: 100, muted: true, active: false },
     ],
   };
+  // A synthwave sunset, drawn rather than shipped as a file, so the preview needs no assets.
+  DEMO_ART['demo-cover'] = 'data:image/svg+xml;utf8,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">' +
+    '<defs><linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">' +
+    '<stop offset="0" stop-color="#12082e"/><stop offset=".55" stop-color="#5a1a7a"/>' +
+    '<stop offset="1" stop-color="#ff4f8b"/></linearGradient>' +
+    '<linearGradient id="sun" x1="0" y1="0" x2="0" y2="1">' +
+    '<stop offset="0" stop-color="#ffd166"/><stop offset="1" stop-color="#ff4f8b"/></linearGradient>' +
+    '<clipPath id="c"><circle cx="200" cy="230" r="96"/></clipPath></defs>' +
+    '<rect width="400" height="400" fill="url(#sky)"/>' +
+    '<g clip-path="url(#c)"><rect x="100" y="130" width="200" height="200" fill="url(#sun)"/>' +
+    '<g fill="#5a1a7a"><rect x="100" y="238" width="200" height="5"/><rect x="100" y="256" width="200" height="8"/>' +
+    '<rect x="100" y="276" width="200" height="11"/><rect x="100" y="299" width="200" height="14"/></g></g>' +
+    '<rect y="300" width="400" height="100" fill="#0b0420"/>' +
+    '<g stroke="#2be3d0" stroke-width="1.6" opacity=".75" fill="none">' +
+    '<path d="M0 316H400M0 336H400M0 362H400M0 400H400"/>' +
+    '<path d="M200 300V400M150 300L40 400M100 300L-60 400M250 300L360 400M300 300L460 400"/></g></svg>');
+
   S.mediaSources = {
     items: [
-      { id: 'src:spotify', name: 'Spotify', kind: 'app', running: true },
-      { id: 'src:spotify-web', name: 'Spotify Web', kind: 'web' },
-      { id: 'src:ytmusic', name: 'YouTube Music', kind: 'web' },
-      { id: 'src:wmp', name: 'Windows Media Player', kind: 'app' },
-      { id: 'src:vlc', name: 'VLC', kind: 'app' },
+      { id: 'src:spotify', name: 'Spotify', kind: 'app', running: true, iconKey: art('i-spotify', 'S', '#1fb96b', '#0b6b3f') },
+      { id: 'src:spotify-web', name: 'Spotify Web', kind: 'web', iconKey: art('i-web', 'W', '#3d7bff', '#1b3a8a') },
+      { id: 'src:ytmusic', name: 'YouTube Music', kind: 'web', iconKey: art('i-ytm', 'Y', '#ff5a4f', '#8a1b1b') },
+      { id: 'src:wmp', name: 'Windows Media Player', kind: 'app', iconKey: art('i-wmp', 'M', '#f29a3a', '#8a4a0b') },
+      { id: 'src:vlc', name: 'VLC', kind: 'app', iconKey: art('i-vlc', 'V', '#ff9d2e', '#a1500a') },
       { id: 'src:music-folder', name: 'Music', kind: 'folder' },
       { id: 'src:video-folder', name: 'Videos', kind: 'folder' },
     ],
   };
   S.media = {
     sessions: [{
-      id: 'Spotify.exe', appName: 'Spotify', title: 'Nightcall', artist: 'Kavinsky',
-      album: 'OutRun', status: 'playing', positionSec: 74, durationSec: 258,
+      id: 'Spotify.exe', appName: 'Spotify', title: 'Midnight Drive', artist: 'Neon Harbor',
+      album: 'Afterglow', artKey: 'demo-cover', status: 'playing', positionSec: 74, durationSec: 258,
       canPlay: true, canPause: true, canNext: true, canPrevious: true, canSeek: true,
       shuffle: false, repeat: 'none', appVolume: 90, appMuted: false,
     }],
@@ -2424,9 +2464,16 @@ function installMockData() {
       fps: 141 + 12 * Math.sin(t / 3), fps1Low: 108,
       fan1Rpm: Math.round(1400 + 1600 * Math.abs(Math.sin(t / 11))),
       fan2Rpm: Math.round(1300 + 1700 * Math.abs(Math.sin(t / 13))),
-      fanMaxRpm: 3400, thermalMode: 'performance',
+      fanMaxRpm: 3400, thermalMode: 'performance', brightness: 72,
     };
     schedule('sys');
+
+    if (live) {
+      S.cast.desktopPeak = Math.round(52 + 30 * Math.abs(Math.sin(t / 2.3)));
+      S.cast.micPeak = Math.round(28 + 34 * Math.abs(Math.sin(t / 1.7)));
+      S.sb.bufferedSeconds = Math.min(60, 48 + (t % 12));
+      schedule('cast'); schedule('soundboard');
+    }
   }, 1000);
   schedule('*');
 }

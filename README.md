@@ -180,12 +180,6 @@ Useful agent flags:
 The log is always written to `%LOCALAPPDATA%\CompanionDeck\host.log`, including when the
 agent runs from the scheduled task with no console attached.
 
-## How it was built
-
-This software was written with the help of Claude, an AI assistant made by Anthropic, working
-under my direction. I made the decisions, tested it on real hardware, and am responsible for the
-result. Claude is not a contributor to this repository.
-
 ## Licence
 
 MIT. See [LICENSE](LICENSE).

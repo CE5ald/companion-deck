@@ -18,15 +18,33 @@ android {
         versionName '1.0.0'
     }
 
+    // A release is signed with the maintainer's key when its keystore.properties is available, either
+    // beside this project or at the path in COMPANIONDECK_KEYSTORE_PROPS. The key never lives in the
+    // repository. Without it (anyone building their own copy) the APK is debug-signed, which installs
+    // fine but cannot be updated in place by the official releases.
+    def keystoreProps = new Properties()
+    def keystoreFile = System.getenv('COMPANIONDECK_KEYSTORE_PROPS')
+        ? file(System.getenv('COMPANIONDECK_KEYSTORE_PROPS')) : rootProject.file('keystore.properties')
+    if (keystoreFile.exists()) keystoreFile.withInputStream { keystoreProps.load(it) }
+
+    signingConfigs {
+        if (keystoreProps['storeFile']) {
+            release {
+                storeFile file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }
+        }
+    }
+
     buildTypes {
         debug {
             minifyEnabled false
         }
         release {
             minifyEnabled false
-            // Debug-signed so `assembleRelease` produces an installable APK without a
-            // keystore. Replace with your own signingConfig to publish anywhere.
-            signingConfig signingConfigs.debug
+            signingConfig keystoreProps['storeFile'] ? signingConfigs.release : signingConfigs.debug
         }
     }
 

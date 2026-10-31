@@ -40,6 +40,12 @@ const NP_SHOWN = "!document.querySelector('#npAmbient').hidden";
 const PAD_SHEET = "(() => { if (!document.querySelector('.pad-grid.editing')) { document.querySelector('.b-sbedit').click(); return 1; } if (document.querySelector('#sheet').hidden) document.querySelector('.pad').click(); return 1; })()";
 const RECORDING = "!!document.querySelector('.rec-live') && document.querySelector('.rec-live').textContent.includes('Recording')";
 
+// Shows the hold-to-confirm panel part-way through a hold. A real hold finishes in 1.5 s, which a headless
+// browser cannot photograph reliably, so the panel is put in its "arming" state with the ring frozen at about
+// two thirds, and the pressed button is marked the way a real press marks it.
+const HOLD_END = "(() => { const b = document.querySelector('.run-list [data-pid]'); if (!b) return 0; const r = b.getBoundingClientRect(); holdHud.show('arming', 'Hold to end ' + b.closest('.run-row').querySelector('.run-nm').textContent, 'Keep pressing for 1.5 s', r.top + r.height / 2); const fg = document.querySelector('.hold-hud .hh-ring .fg'); fg.style.transition = 'none'; fg.style.strokeDashoffset = '32'; b.classList.add('holding'); return 1; })()";
+const HOLDING = "(() => { const h = document.querySelector('.hold-hud'); return !!h && !h.hidden && h.dataset.state === 'arming'; })()";
+
 // name, size, and how to reach the view.
 //   js     runs after the page has laid out (and again on every retry until `ready` holds)
 //   ready  an expression that must be true before the picture is taken. Timing in a headless
@@ -63,6 +69,8 @@ const SHOTS = [
   { name: 'ambient',         nav: 'clock', js: AMBIENT, ready: IS_AMBIENT },
   { name: 'outputs',         nav: 'media', js: TO_VOICE, ready: SCROLLED },
   { name: 'notifications',   nav: 'clock', js: SCROLL, ready: SCROLLED },
+  { name: 'calendars',       nav: 'clock', js: TO('.cal-card'), ready: SCROLLED },
+  { name: 'hold-to-confirm', nav: 'apps', js: HOLD_END, ready: HOLDING },
   { name: 'history',         nav: 'perf', js: TO('.hist-card'), ready: SCROLLED },
   { name: 'top-processes',   nav: 'perf', js: TO('.top-card'), ready: SCROLLED },
   { name: 'sessions',        nav: 'game', js: OPEN_SESSION, ready: SESSION_OPEN },

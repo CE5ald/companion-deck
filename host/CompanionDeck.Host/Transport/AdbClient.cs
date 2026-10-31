@@ -31,6 +31,9 @@ public sealed class AdbClient
     {
         var candidates = new List<string>
         {
+            // The installer puts Google's platform-tools beside the agent. Checked first, so the copy that
+            // shipped with this version is used and a stale one elsewhere on the PC cannot break it.
+            Path.Combine(AppContext.BaseDirectory, "platform-tools", "adb.exe"),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                          "Android", "Sdk", "platform-tools", "adb.exe"),
         };

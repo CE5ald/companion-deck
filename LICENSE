@@ -1,21 +1,85 @@
-MIT License
+Companion Deck License
 
-Copyright (c) 2026 CE5ald
+Copyright (c) 2026 CE5ald. All rights reserved except as granted below.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+In short: anyone may download and use Companion Deck for free, for any purpose.
+Redistributing it, publishing a modified version of it, or taking it over and
+continuing its development requires the author's written permission first.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+--------------------------------------------------------------------------------
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+1. FREE USE
+
+   You may download, install and run Companion Deck (the Windows program, the
+   Android app, and the source code) on your own computers and devices, for any
+   personal, educational, internal-business or commercial purpose, free of
+   charge, and without asking.
+
+2. PRIVATE CHANGES
+
+   You may build Companion Deck from its source code and change your own copy
+   for your own use. You may not share, publish or distribute your changed copy,
+   or any part of it, to anyone else (see section 3).
+
+3. WHAT NEEDS THE AUTHOR'S WRITTEN PERMISSION FIRST
+
+   Without the author's prior written approval you may not:
+
+   a. copy, redistribute, re-upload, mirror or host Companion Deck (source or
+      compiled), in whole or in part, other than the official downloads on the
+      project's GitHub page;
+   b. publish, distribute or release a modified version of it, a project built
+      substantially from it, or a fork intended to continue, take over or
+      compete with its development;
+   c. sell, rent, license, or charge for it or any part of it, or bundle it
+      into something that is sold or distributed;
+   d. remove or change this license or the copyright notices; or
+   e. use the name "Companion Deck" or the author's name in a way that suggests
+      approval or endorsement.
+
+4. HOW TO ASK
+
+   Open an issue titled "Permission request" at
+   https://github.com/CE5ald/companion-deck/issues saying what you want to do.
+   Permission is only given in writing by the author, may come with conditions,
+   and is for the specific use described. Silence is not permission.
+
+5. CONTRIBUTIONS ARE WELCOME
+
+   You may fork the project on GitHub for the sole purpose of proposing a change
+   back to it with a pull request. If you submit a contribution, you give the
+   author the right to use, change and distribute it as part of Companion Deck
+   under any license, and you confirm you have the right to give it.
+   Using GitHub's features to view the code does not grant any other right.
+
+6. EARLIER VERSIONS
+
+   Versions of Companion Deck published on or before 31 October 2026 were
+   released under the MIT License. Copies that were received under it stay under
+   it; that cannot be taken back. This license applies to every version
+   published after that.
+
+7. THIRD-PARTY COMPONENTS
+
+   Companion Deck uses other people's software, each under its own license. They
+   are listed in THIRD-PARTY-NOTICES.md. This license does not change their
+   terms and does not apply to them.
+
+8. NO WARRANTY
+
+   COMPANION DECK IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+   NON-INFRINGEMENT. IT CAN CHANGE SETTINGS ON YOUR COMPUTER (FOR EXAMPLE AUDIO
+   DEVICES, POWER MODE AND SCREEN BRIGHTNESS) AND CAN END PROGRAMS WHEN YOU ASK
+   IT TO. YOU USE IT AT YOUR OWN RISK.
+
+9. LIMIT OF LIABILITY
+
+   TO THE FULLEST EXTENT THE LAW ALLOWS, THE AUTHOR IS NOT LIABLE FOR ANY CLAIM,
+   DAMAGES OR OTHER LIABILITY ARISING FROM THE SOFTWARE OR ITS USE.
+
+10. ENDING
+
+   If you break section 3, your permission under this license ends, and you must
+   stop distributing and delete the copies you made. Your right to simply use
+   your own installed copy under section 1 is unaffected by anything else.

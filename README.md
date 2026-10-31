@@ -13,6 +13,30 @@ currently showing, at the rate it asks for, and stops entirely when the screen g
 
 ![The Companion Deck home screen: now playing with artwork, CPU, GPU and RAM dials, and the audio mixer](docs/images/home.png)
 
+## Download
+
+Nothing to build and nothing else to install. Get the files from the
+**[latest release](https://github.com/CE5ald/companion-deck/releases/latest)**:
+
+| File | What it is |
+|---|---|
+| **`CompanionDeck-Setup-1.0.0.exe`** | The Windows installer. It contains the program (with its own .NET, so you install nothing first), fetches Google's ADB for the USB cable and checks it is signed by Google, and can set up the rest for you. |
+| **`CompanionDeck-1.0.0.apk`** | The Android app, for installing on the tablet by hand. The installer can also put it on a plugged-in tablet for you. |
+| `SHA256SUMS.txt` | Checksums, to check the downloads are intact. |
+
+**In three steps**
+
+1. Run the installer on your PC and leave the ticked options as they are. It starts Companion Deck when you
+   sign in, opens the Wi-Fi link in the firewall for private networks only, and offers to install the app on a
+   tablet that is plugged in.
+2. On the tablet, turn on **USB debugging** (the app walks you through it and ticks each step itself). Plug it in.
+3. That is all: the tablet app opens and connects. Windows' firewall and the optional CPU-temperature driver
+   are the only extras, and the installer asks before touching either.
+
+**What your PC and tablet need:** Windows 10 or 11 (64-bit) and an Android 5.0 or newer device with a recent
+*Android System WebView*. It finds everything else itself, and any feature your hardware cannot do is simply
+not drawn.
+
 ## Screenshots
 
 Every page of the tablet UI, captured at 2x from the built-in demo data (no real machine appears
@@ -61,6 +85,10 @@ in any of them). `node tools/capture-screenshots.js` regenerates them.
 </tr>
 <tr>
 <td><img src="docs/images/pad-settings.png" alt="Soundboard pad settings with colour, folder, volume, routing and loop"><br><b>Soundboard pads</b><br>Folders, colours, per-pad volume and looping.</td>
+<td><img src="docs/images/calendars.png" alt="Calendars subscribed by link, with a failed one showing why"><br><b>Calendars</b><br>Paste a private calendar link once; it refreshes itself. The link stays on the PC.</td>
+</tr>
+<tr>
+<td><img src="docs/images/hold-to-confirm.png" alt="Hold-to-end panel with a filling ring, away from the finger"><br><b>Hold to confirm</b><br>Ending a program takes a 1.5 s hold, shown where your finger is not, and reports what happened.</td>
 <td></td>
 </tr>
 <tr>
@@ -71,17 +99,20 @@ in any of them). `node tools/capture-screenshots.js` regenerates them.
 
 ## What you need
 
-- **Windows 10 version 2004 (build 19041) or newer.** Earlier builds lack the media-session
-  API the now-playing card is built on.
-- **An Android 5.0 device or newer**, in landscape, about 600dp wide or more. A 1024x600
+- **Windows 10 or 11, 64-bit.** The now-playing card uses the media-session API that arrived in
+  Windows 10 version 2004 (build 19041); builds from 1809 up run without it. Earlier than 1809 is not supported.
+- **An Android 5.0 device or newer**, in landscape, about 600dp wide or more, with *Android System WebView*
+  version 80 or later (the Play Store keeps it current; the app tells you if it is too old). A 1024x600
   tablet is the sweet spot; a phone held sideways works.
 - **A USB cable.** A network connection works as a fallback, including the one Android's
   USB tethering makes over the cable itself.
 
-Nothing is installed system-wide, there is no account, no cloud service, and no IP address
-to type anywhere.
+There is no account, no cloud service, and no IP address to type anywhere. The installer puts the
+program in Program Files and removes it cleanly; your settings stay until you delete them.
 
-## Getting started
+## Building it yourself
+
+The download above is all most people need. To build from source instead:
 
 ```bash
 git clone https://github.com/CE5ald/companion-deck.git
@@ -201,6 +232,7 @@ host/        Windows agent (.NET 8). Telemetry, audio, media, launcher, the link
 tablet/      Android app (Kotlin). A thin shell around a WebView.
   app/src/main/assets/   The UI itself: one HTML file, one CSS file, one JS file.
 scripts/     Setup, launch, elevated install.
+installer/   Builds the Windows installer and the signed APK that releases carry.
 tools/       A static server for designing the UI in a desktop browser.
 ```
 
@@ -250,11 +282,19 @@ result. Claude is not a contributor to this repository.
 
 ## Licence
 
-MIT. See [LICENSE](LICENSE).
+**Free to use. Ask first to share or continue it.** Anyone may download and use Companion Deck for free, for any
+purpose. Redistributing it, publishing a changed version, or taking over its development needs the author's
+written permission: open an issue titled "Permission request". Pull requests are welcome. The full terms are in
+[LICENSE](LICENSE). Versions published before 31 October 2026 were released under the MIT License, and copies
+received under it stay under it.
+
+This is a source-available license, not an open-source one: you can read the code and use the program, but you
+cannot republish it.
 
 ### Third-party software
 
 [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) (MPL-2.0) reads
 CPU temperature and fans, [TraceEvent](https://github.com/microsoft/perfview) (MIT) reads frame rates,
-and [NAudio](https://github.com/naudio/NAudio) (MIT) handles audio. Reading CPU sensors needs the
-signed [PawnIO](https://pawnio.eu/) driver, which is installed by you and never by this program.
+and [NAudio](https://github.com/naudio/NAudio) (MIT) handles audio. Each keeps its own license; see
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Reading CPU sensors needs the signed
+[PawnIO](https://pawnio.eu/) driver, which is installed by you and never by this program.

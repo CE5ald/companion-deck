@@ -23,8 +23,6 @@ node_modules/
 Thumbs.db
 desktop.ini
 
-# Personal assistant settings
-.claude/settings.local.json
 tablet/keystore.properties
 
 installer/out/

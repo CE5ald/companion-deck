@@ -147,6 +147,65 @@ the moment it is done, and the guide disappears for good once a link has worked 
 After that first run, the promise holds literally: plug the cable in, and the tablet wakes
 up and connects by itself.
 
+## Make it fit your own PC and tablet
+
+Companion Deck detects what your PC and tablet can do, and shows only that. If something you have is not
+covered (your laptop maker's fan or performance controls, an odd screen size, a game launcher, a button you
+want), you can change your own copy, and an AI coding assistant makes that practical even if you do not
+program. Editing it for yourself is allowed; sharing the changed copy is not, without asking (see
+[Licence](#licence)).
+
+**1. Get the code.** Download it from this page (the green *Code* button, then *Download ZIP*) and unzip it,
+or run `git clone https://github.com/CE5ald/companion-deck.git`. Then run `Setup.cmd` once so you can build
+it. The installer from the Releases page is for using it; changing it needs the code.
+
+**2. Open the folder in an AI coding agent.** Any one that can read and edit files and run commands works:
+Codex, Cursor, Gemini CLI, GitHub Copilot's agent mode, Windsurf and many others. Open the
+folder as the project, so it can see everything in it.
+
+**3. Tell it about your hardware and what you want.** The more it knows, the better it does. Give it:
+
+- your PC: the make and model, Windows version, and graphics card;
+- your tablet: the model, Android version and screen size;
+- what is missing or wrong, in plain words ("my laptop is an ASUS and the fan speeds show as not available");
+- the report from `CompanionDeck.Host.exe --selftest` (what this PC supports) and the end of
+  `%LOCALAPPDATA%\CompanionDeck\host.log`.
+
+A prompt that works well as a starting point:
+
+> This is Companion Deck, a Windows agent plus an Android tablet app. Read README.md and docs/USAGE.md
+> first. My PC is *[make, model, Windows version, GPU]* and my tablet is *[model, Android version,
+> resolution]*. I want *[what you want]*. Find out how this machine exposes it, and show me what you
+> found before you change anything. Make read-only probes first. Only write to hardware after you have
+> read back that the value changed. Then make the smallest change that works, add a check for it, and
+> run `CompanionDeck.Host.exe --selftest` and `node tools/selftest-link.js`.
+
+**4. Let it build and test, and try it on the real devices.** The agent can run the checks above. For the
+tablet screens, `node tools/uiserve.js` previews the interface in your browser with demo data, with no tablet
+needed. Build it with `Setup.cmd`, then try the change on the real PC and tablet. A change that passes its checks can still behave differently on real hardware.
+
+**Where things live**
+
+| To change... | Look in |
+|---|---|
+| How a sensor, fan or performance mode is read or set | `host/CompanionDeck.Host/Telemetry/` |
+| Which games and apps are found, and how they are ordered | `host/CompanionDeck.Host/Launcher/` |
+| Audio devices, mixer, soundboard, recording | `host/CompanionDeck.Host/Audio/` |
+| What the tablet is told it can do | `host/CompanionDeck.Host/Server/DeckServer.cs` (the capabilities) |
+| How the tablet looks and behaves | `tablet/app/src/main/assets/` (`index.html`, `app.css`, `app.js`) |
+
+**Good first requests:** support for your laptop maker's performance mode or fan readings; a layout for your
+tablet's screen; shortcuts for the software you actually use; a new tile on the Deck page.
+
+**Stay safe**
+
+- Work on a copy or a branch, and keep the installer you downloaded, so you can go back.
+- Back up `%LOCALAPPDATA%\CompanionDeck` (your settings, tiles and pairing) before big changes.
+- Be careful with anything that writes to firmware or the embedded controller. Ask the agent to read first,
+  and to verify every write by reading the value back. Do not guess at registers on hardware it cannot check.
+- If your change would help other people with the same hardware, open an issue or a pull request instead
+  of publishing your own copy, or ask for permission.
+
 ## What works on which hardware
 
 Every hardware feature is probed at startup, and the tablet is told what is genuinely
@@ -174,7 +233,7 @@ available, so a control is only ever drawn when it can actually do something. Ru
 | Clock, timers, stopwatch, pomodoro | Any PC. Timers are kept on the PC and survive a tablet reboot |
 | Calendar | Any PC. Paste a calendar's private `.ics` link once (Google, Outlook, iCloud and Fastmail all give one) and it refreshes itself; or drop an exported `.ics` file in the calendar folder. The link stays on the PC |
 | Mic mute, deafen, per-output volume, remembered app levels | Any PC |
-| Macro recorder | Any PC. Replays keys and mouse, so it cannot reach a window running as administrator unless the agent does too |
+| Macro recorder | Any PC. Records and replays keys and mouse |
 | Notification mirror | Windows 10 or 11. Read-only, off until switched on from the cable. See [the usage notes](docs/USAGE.md#notifications) |
 | Night mode | The tablet's own screen. Nothing on the PC |
 | History graphs, alerts, top processes | Any PC. GPU throttle reasons need an NVIDIA driver; per-process GPU needs Windows' GPU counters |
@@ -276,20 +335,20 @@ agent runs from the scheduled task with no console attached.
 
 ## How it was built
 
-This software was written with the help of Claude, an AI assistant made by Anthropic, working
-under my direction. I made the decisions, tested it on real hardware, and am responsible for the
-result. Claude is not a contributor to this repository.
+This software was written with the help of AI, working under my direction. I made the decisions,
+tested it on real hardware, and am responsible for the result.
 
 ## Licence
 
-**Free to use. Ask first to share or continue it.** Anyone may download and use Companion Deck for free, for any
-purpose. Redistributing it, publishing a changed version, or taking over its development needs the author's
-written permission: open an issue titled "Permission request". Pull requests are welcome. The full terms are in
+**Free to use and to change for yourself. Ask first to share or continue it.** Anyone may download, use and
+edit Companion Deck for their own private use, for free, including with the help of AI tools. Sharing it,
+publishing a changed version, or taking over its development needs the author's written permission: open an
+issue titled "Permission request". Pull requests are welcome. The full terms are in
 [LICENSE](LICENSE). Versions published before 31 October 2026 were released under the MIT License, and copies
 received under it stay under it.
 
-This is a source-available license, not an open-source one: you can read the code and use the program, but you
-cannot republish it.
+This is a source-available license, not an open-source one: you can read the code, use the program and change
+it for yourself, but you cannot republish it.
 
 ### Third-party software
 

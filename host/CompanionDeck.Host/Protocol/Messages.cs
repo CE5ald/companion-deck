@@ -16,6 +16,8 @@ public sealed class ClientHello
     public string? Version { get; set; }
     /// <summary>Asset keys the tablet already has cached, so we never resend artwork.</summary>
     public List<string>? CachedAssets { get; set; }
+    /// <summary>Random per connection. The PC's proof is made over it, so it cannot be replayed.</summary>
+    public string? Nonce { get; set; }
 }
 
 /// <summary>
@@ -59,6 +61,14 @@ public sealed class HostHello
     /// showing dead buttons. Nothing here is claimed unless it was probed successfully.
     /// </summary>
     public Capabilities Capabilities { get; set; } = new();
+
+    /// <summary>The PC's half of the network handshake: its own nonce, and proof it holds the key.</summary>
+    public string? Nonce { get; set; }
+    public string? Proof { get; set; }
+    /// <summary>"required" on the network, where the tablet must answer before anything is served.</summary>
+    public string? Auth { get; set; }
+    /// <summary>The key itself, sent only over the cable. See <see cref="Transport.Pairing"/>.</summary>
+    public string? Pair { get; set; }
 }
 
 public sealed class Capabilities
@@ -66,6 +76,14 @@ public sealed class Capabilities
     public bool Elevated { get; set; }
     public bool Brightness { get; set; }
     public bool Fps { get; set; }
+    /// <summary>The overlay and capture shortcuts whose software is installed here.</summary>
+    public List<string>? GameShortcuts { get; set; }
+    /// <summary>Why frame rate is unavailable (for example it needs the elevated agent). Null when it works.</summary>
+    public string? FpsNote { get; set; }
+    /// <summary>Why CPU temperature or fans are not available and what would fix it. Null when they work.</summary>
+    public string? SensorsNote { get; set; }
+    /// <summary>The laptop brand whose firmware profile the performance control drives ("Legion", "Lenovo"), or null for Windows' own.</summary>
+    public string? VendorName { get; set; }
     public bool CpuTemp { get; set; }
     /// <summary>Any GPU readings at all: load, and usually VRAM.</summary>
     public bool Gpu { get; set; }
@@ -78,11 +96,19 @@ public sealed class Capabilities
     public string? ThermalModeKind { get; set; }
     /// <summary>Charge mode is readable. Deliberately not paired with a write capability:
     /// the firmware has no setter, so the tablet must render it as status, not a control.</summary>
+    public bool ChargeMode { get; set; }
+    public bool KeyboardLight { get; set; }
     public bool AudioDeviceSwitch { get; set; }
     /// <summary>A virtual cable is installed, so desktop audio can be sent to the mic input.</summary>
     public bool MicCast { get; set; }
     public bool MediaSeek { get; set; }
     public string Transport { get; set; } = "";
+}
+
+/// <summary>Sent once the tablet has proved it holds the key; everything is served from here.</summary>
+public sealed class AuthResult
+{
+    public string Type { get; set; } = "authed";
 }
 
 public sealed class CommandResult
@@ -93,6 +119,14 @@ public sealed class CommandResult
     public string? Error { get; set; }
 }
 
+
+public sealed class FanInfo
+{
+    public string Name { get; set; } = "";
+    public int Rpm { get; set; }
+    /// <summary>Rated ceiling when the vendor reports one, so the tablet can show a fraction.</summary>
+    public int? MaxRpm { get; set; }
+}
 
 public sealed class SysState
 {
@@ -123,6 +157,14 @@ public sealed class SysState
     public double? Fps { get; set; }
     public double? Fps1Low { get; set; }
 
+    /// <summary>"power", "heat" or "both" while the GPU is being held back; null otherwise.</summary>
+    public string? GpuThrottle { get; set; }
+    /// <summary>"heat", "power" or "battery" while the CPU runs far below its clock under load.</summary>
+    public string? CpuThrottle { get; set; }
+
+    /// <summary>Every fan this PC reports, however many: two on a gaming laptop, none on a fanless one,
+    /// six on a desktop. Empty when there is no readable fan.</summary>
+    public List<FanInfo> Fans { get; set; } = new();
     public int? Fan1Rpm { get; set; }
     public int? Fan2Rpm { get; set; }
     /// <summary>Rated ceiling, so the tablet can express a fan speed as a fraction.</summary>
@@ -130,6 +172,10 @@ public sealed class SysState
     public string? ThermalMode { get; set; }
     public int? Brightness { get; set; }
 
+    /// <summary>Read-only: this firmware exposes no setter for the charge mode.</summary>
+    public string? ChargeMode { get; set; }
+    /// <summary>White keyboard backlight level, 0-2. Not the RGB/Spectrum profile.</summary>
+    public int? KeyboardLight { get; set; }
 }
 
 public sealed class MediaSessionInfo
@@ -222,6 +268,19 @@ public sealed class SoundClipInfo
     /// <summary>Decoded and found to contain no audible signal - almost always a capture
     /// made while nothing was playing. Shown so a silent pad explains itself.</summary>
     public bool Silent { get; set; }
+    /// <summary>The folder it is filed under: a sub-folder of the soundboard folder, or one chosen on the tablet.</summary>
+    public string Group { get; set; } = "";
+    /// <summary>A palette name, or empty for the default.</summary>
+    public string Color { get; set; } = "";
+    /// <summary>Plays over and over until pressed again.</summary>
+    public bool Loop { get; set; }
+}
+
+/// <summary>Bars for the visualiser, 0 to 100 each, low frequencies first.</summary>
+public sealed class SpectrumState
+{
+    public string Type { get; set; } = "spectrum";
+    public int[] Bands { get; set; } = Array.Empty<int>();
 }
 
 public sealed class RunningAppsState
@@ -246,6 +305,9 @@ public sealed class AudioDeviceInfo
     public string Id { get; set; } = "";
     public string Name { get; set; } = "";
     public bool IsDefault { get; set; }
+    /// <summary>This endpoint's own level. Only filled for output devices.</summary>
+    public int? Volume { get; set; }
+    public bool? Muted { get; set; }
 }
 
 public sealed class AudioAppInfo
@@ -257,6 +319,8 @@ public sealed class AudioAppInfo
     public bool Muted { get; set; }
     /// <summary>True when the session is currently producing sound, used to de-clutter the mixer.</summary>
     public bool Active { get; set; }
+    /// <summary>Its level is kept and put back each time the app starts.</summary>
+    public bool Remembered { get; set; }
 }
 
 public sealed class AudioState
@@ -266,6 +330,8 @@ public sealed class AudioState
     public bool MasterMuted { get; set; }
     public int MicVolume { get; set; }
     public bool MicMuted { get; set; }
+    /// <summary>Speakers and microphone are both muted. Derived, so it cannot drift from the real state.</summary>
+    public bool Deafened { get; set; }
     public List<AudioDeviceInfo> Outputs { get; set; } = new();
     public List<AudioDeviceInfo> Inputs { get; set; } = new();
     public List<AudioAppInfo> Apps { get; set; } = new();
@@ -297,6 +363,10 @@ public sealed class LaunchTarget
 
     /// <summary>Hidden by the user. Still sent, so the edit mode can offer to restore it.</summary>
     public bool Hidden { get; set; }
+
+    /// <summary>Whole minutes with the game in front; null for something never played.</summary>
+    public int? PlayMinutes { get; set; }
+    public long? LastPlayedMs { get; set; }
 }
 
 public sealed class AppsState
@@ -317,12 +387,238 @@ public sealed class MediaSourceInfo
     public string Kind { get; set; } = "app";
     public string? IconKey { get; set; }
     public bool Running { get; set; }
+    /// <summary>For a web service, which one (spotify, ytmusic). The tablet draws that identity itself.</summary>
+    public string? Service { get; set; }
+    /// <summary>The browser that opens it, named and with its icon. A badge, never the identity.</summary>
+    public string? Via { get; set; }
+    public string? ViaIconKey { get; set; }
 }
 
 public sealed class MediaSourcesState
 {
     public string Type { get; set; } = "mediaSources";
     public List<MediaSourceInfo> Items { get; set; } = new();
+}
+
+
+public sealed class TilesState
+{
+    public string Type { get; set; } = "tiles";
+    /// <summary>Id of the profile being shown.</summary>
+    public string Active { get; set; } = "";
+    /// <summary>The profile was chosen by what is in front, not pinned.</summary>
+    public bool Auto { get; set; }
+    public string? Pinned { get; set; }
+    /// <summary>Editing is offered only over the cable; see DeckServer.</summary>
+    public bool CanEdit { get; set; }
+    public List<Tiles.TileProfile> Profiles { get; set; } = new();
+    public List<string> Running { get; set; } = new();
+    public TileErrorInfo? Error { get; set; }
+    public TileCatalog Catalog { get; set; } = new();
+}
+
+public sealed class TileErrorInfo
+{
+    public string Tile { get; set; } = "";
+    public string Message { get; set; } = "";
+    public long AtMs { get; set; }
+}
+
+/// <summary>The vocabulary the editor offers, so the tablet cannot invent a step the host would refuse.</summary>
+public sealed class TileCatalog
+{
+    public string[] Sys { get; set; } = Array.Empty<string>();
+    public string[] Keys { get; set; } = Array.Empty<string>();
+}
+
+public sealed class NotificationItem
+{
+    public long Id { get; set; }
+    public string App { get; set; } = "";
+    public string Title { get; set; } = "";
+    public string Body { get; set; } = "";
+    public long AtMs { get; set; }
+}
+
+public sealed class NotificationsState
+{
+    public string Type { get; set; } = "notifications";
+    /// <summary>Switched on by the user. Off by default, and nothing is read while it is off.</summary>
+    public bool Enabled { get; set; }
+    /// <summary>This PC's Windows lets us read its notifications at all.</summary>
+    public bool Available { get; set; }
+    public string? Problem { get; set; }
+    public bool CanEdit { get; set; }
+    public List<NotificationItem> Items { get; set; } = new();
+}
+
+public sealed class TopProcessInfo
+{
+    public int Pid { get; set; }
+    public string Name { get; set; } = "";
+    public double? Cpu { get; set; }
+    public long RamMb { get; set; }
+    public double? Gpu { get; set; }
+    /// <summary>Not offered for closing: the system, or security software.</summary>
+    public bool Protected { get; set; }
+    /// <summary>Already running at a lowered priority.</summary>
+    public bool Low { get; set; }
+    /// <summary>How many processes share this name.</summary>
+    public int Count { get; set; } = 1;
+}
+
+public sealed class TopState
+{
+    public string Type { get; set; } = "top";
+    /// <summary>CPU is a rate; the first look after a quiet spell has none.</summary>
+    public bool HaveCpu { get; set; }
+    public bool GpuAvailable { get; set; }
+    public List<TopProcessInfo> Cpu { get; set; } = new();
+    public List<TopProcessInfo> Ram { get; set; } = new();
+    public List<TopProcessInfo> Gpu { get; set; } = new();
+}
+
+public sealed class HistoryState : Monitoring.HistoryData
+{
+    public string Type { get; set; } = "history";
+    public int Seconds { get; set; }
+    public long NowMs { get; set; }
+}
+
+public sealed class AlertsState
+{
+    public string Type { get; set; } = "alerts";
+    public bool Enabled { get; set; }
+    public int CpuTemp { get; set; }
+    public int GpuTemp { get; set; }
+    public int Ram { get; set; }
+    public int Fan { get; set; }
+    public bool CpuTempAvailable { get; set; }
+    public bool GpuTempAvailable { get; set; }
+    public bool FanAvailable { get; set; }
+    public List<string> Active { get; set; } = new();
+}
+
+/// <summary>One crossing, sent the moment it happens whether or not the tablet is looking.</summary>
+public sealed class AlertMessage
+{
+    public string Type { get; set; } = "alert";
+    public string Metric { get; set; } = "";
+    public string Label { get; set; } = "";
+    public double Value { get; set; }
+    public double Limit { get; set; }
+    public long AtMs { get; set; }
+}
+
+public sealed class SessionsState
+{
+    public string Type { get; set; } = "sessions";
+    public bool Enabled { get; set; }
+    /// <summary>Frame rates need PresentMon; without it a session still records its length and load.</summary>
+    public bool FpsAvailable { get; set; }
+    public List<Monitoring.SessionRecord> Items { get; set; } = new();
+    public bool AutoPower { get; set; }
+    public bool AutoPowerApplied { get; set; }
+    public bool AutoPowerAvailable { get; set; }
+    public bool CanEdit { get; set; }
+}
+
+public sealed class FramesState
+{
+    public string Type { get; set; } = "frames";
+    public double[] Times { get; set; } = Array.Empty<double>();
+    public double? Fps { get; set; }
+    /// <summary>The game being recorded now, if one is.</summary>
+    public Monitoring.LiveSession? Live { get; set; }
+}
+
+public sealed class MacroInfo
+{
+    public string Id { get; set; } = "";
+    public string Name { get; set; } = "";
+    public long Created { get; set; }
+    public int Events { get; set; }
+    public double Seconds { get; set; }
+}
+
+public sealed class MacroRecording
+{
+    public int Count { get; set; }
+    public double Seconds { get; set; }
+    /// <summary>The 60 second or 400 event limit was reached; nothing more is being kept.</summary>
+    public bool Full { get; set; }
+}
+
+public sealed class MacrosState
+{
+    public string Type { get; set; } = "macros";
+    public List<MacroInfo> Items { get; set; } = new();
+    public MacroRecording? Recording { get; set; }
+    public bool CanEdit { get; set; }
+}
+
+public sealed class CalendarEvent
+{
+    public string Title { get; set; } = "";
+    public long StartMs { get; set; }
+    public long EndMs { get; set; }
+    public bool AllDay { get; set; }
+    public string? Place { get; set; }
+}
+
+public sealed class ClockState
+{
+    public string Type { get; set; } = "clock";
+    /// <summary>The PC's clock. The tablet's own may be wrong; it counts on from this.</summary>
+    public long NowMs { get; set; }
+    public int UtcOffsetMin { get; set; }
+    public string Zone { get; set; } = "";
+    public List<CalendarEvent> Events { get; set; } = new();
+    /// <summary>Where calendar files go, shown so it is obvious how to add one.</summary>
+    public string Folder { get; set; } = "";
+    public int CalendarFiles { get; set; }
+    /// <summary>Calendars subscribed by link. The address itself never leaves the PC.</summary>
+    public List<CalendarSubInfo> Subscriptions { get; set; } = new();
+    /// <summary>Adding or removing a calendar is offered only over the cable.</summary>
+    public bool CanEdit { get; set; }
+}
+
+public sealed class CalendarSubInfo
+{
+    public string Id { get; set; } = "";
+    public string Name { get; set; } = "";
+    public string Host { get; set; } = "";
+    public long LastOkMs { get; set; }
+    /// <summary>Why the last fetch failed, or null. The previous copy is still shown meanwhile.</summary>
+    public string? Error { get; set; }
+}
+
+public sealed class TimerInfo
+{
+    public string Id { get; set; } = "";
+    /// <summary>countdown | stopwatch | pomodoro</summary>
+    public string Kind { get; set; } = "countdown";
+    public string Label { get; set; } = "";
+    /// <summary>running | paused | ringing</summary>
+    public string State { get; set; } = "running";
+    public long DurationMs { get; set; }
+    /// <summary>Wall-clock moment a running countdown reaches zero.</summary>
+    public long? EndsAtMs { get; set; }
+    public long? RemainingMs { get; set; }
+    /// <summary>Stopwatch: the moment it would have started if never paused.</summary>
+    public long? StartedAtMs { get; set; }
+    public long? ElapsedMs { get; set; }
+    /// <summary>work | short | long, for a pomodoro.</summary>
+    public string? Phase { get; set; }
+    public int? Round { get; set; }
+    public int? Rounds { get; set; }
+}
+
+public sealed class TimersState
+{
+    public string Type { get; set; } = "timers";
+    public long NowMs { get; set; }
+    public List<TimerInfo> Items { get; set; } = new();
 }
 
 

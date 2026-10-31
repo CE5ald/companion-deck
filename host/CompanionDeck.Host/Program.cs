@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using CompanionDeck.Host.Actions;
 using CompanionDeck.Host.Server;
 using CompanionDeck.Host.Transport;
@@ -9,8 +9,41 @@ internal static class Program
 {
     public const string Version = "1.0.0";
 
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool SetProcessDpiAwarenessContext(IntPtr context);
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")] private static extern IntPtr GetConsoleWindow();
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")] private static extern uint GetConsoleProcessList(uint[] list, uint count);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hwnd, int cmd);
+
+    /// <summary>
+    /// The agent is a console program so that --selftest and the probes can print, but started by the
+    /// logon task or a double-click that leaves a console window sitting on the desktop, and closing it
+    /// ends the agent. When this process is the only one attached to its console, nobody is reading
+    /// it, so it is hidden. Run from a terminal there is more than one process on the console and
+    /// nothing is touched; --show-console keeps it for the rare case where it is wanted.
+    /// </summary>
+    private static void HideOwnConsole(string[] args)
+    {
+        if (args.Contains("--show-console") || args.Contains("--verbose") || args.Contains("--selftest")
+            || args.Any(a => a.StartsWith("--probe", StringComparison.Ordinal)) || args.Contains("--set-output")) return;
+        try
+        {
+            var window = GetConsoleWindow();
+            if (window == IntPtr.Zero) return;
+            if (GetConsoleProcessList(new uint[4], 4) == 1) ShowWindow(window, 0 /* SW_HIDE */);
+        }
+        catch { /* a console that cannot be hidden is only untidy */ }
+    }
+
     private static async Task<int> Main(string[] args)
     {
+        // Without this, a laptop set to 125 percent scaling reports the mouse in one coordinate
+        // space to the input hooks and another to everything else, and a recorded macro clicks
+        // somewhere else on replay. The agent draws nothing, so being exact costs nothing.
+        try { SetProcessDpiAwarenessContext(new IntPtr(-4)); } catch { /* an older Windows: no change */ }
+
+        HideOwnConsole(args);
         Log.Level = args.Contains("--verbose") ? LogLevel.Debug : LogLevel.Info;
 
         // Always keep a log on disk. When the agent runs from the Scheduled Task there is
@@ -28,6 +61,12 @@ internal static class Program
 
         if (args.Contains("--probe-actions"))
             return ProbeActions();
+
+        if (args.Contains("--probe-macro"))
+            return ProbeMacro();
+
+        if (args.Contains("--probe-notifications"))
+            return ProbeNotifications(args);
 
         int fpsIdx = Array.IndexOf(args, "--probe-fps");
         if (fpsIdx >= 0)
@@ -111,8 +150,12 @@ internal static class Program
         var (battery, _) = counters.ReadBattery();
         Row("battery", battery is not null, battery is null ? "desktop, or no battery reported" : $"{battery}%");
 
+        // The same switch the agent honours: skip the vendor providers to see what a PC without them gets.
+        bool generic = Environment.GetEnvironmentVariable("COMPANIONDECK_GENERIC") == "1";
+        if (generic) Console.WriteLine("  (COMPANIONDECK_GENERIC=1: vendor providers skipped)" + Environment.NewLine);
+
         using var nvml = new Telemetry.Nvml();
-        bool haveNvml = nvml.TryInitialize();
+        bool haveNvml = !generic && nvml.TryInitialize();
         Row("GPU via NVML", haveNvml, haveNvml ? nvml.DeviceName : "no NVIDIA driver");
 
         using var gpu = new Telemetry.GpuCounters();
@@ -143,23 +186,40 @@ internal static class Program
         // threaded through every row.
         bool vendorTemp = false, vendorFans = false, vendorThermal = false;
 
+        var ec = new Telemetry.LenovoEc();
+        if (!generic) ec.Probe();
+        vendorTemp = ec.HasCpuTemp; vendorFans = ec.HasFans; vendorThermal = ec.HasThermalMode;
+        Row("vendor EC", ec.Available,
+            ec.Available ? $"fans={ec.HasFans}, cpuTemp={ec.HasCpuTemp}, thermal={ec.HasThermalMode}"
+            : ec.NeedsElevation ? "present, needs the elevated agent" : "not a supported Lenovo");
 
-        Row("CPU temperature", vendorTemp || zone.Available,
+        using var sensors = new Telemetry.HardwareSensors();
+        sensors.Probe(gpuToo: !haveNvml);
+        var hw = sensors.Available ? sensors.Read() : null;
+
+        Row("CPU temperature", vendorTemp || zone.Available || sensors.HasCpuTemp,
             vendorTemp ? "vendor sensor"
+            : sensors.HasCpuTemp ? $"sensor chip, {hw?.CpuTempC?.ToString("F0")} C"
             : zone.Available ? $"ACPI zone, {zone.Read()} C"
-            // Both routes are WMI classes that refuse an ordinary caller, so "absent" and
-            // "not allowed to look" are the same silence. Saying which it is matters:
-            // one is a hardware fact, the other is a thing the user can fix.
-            : Elevation.IsElevated ? "no readable sensor on this machine"
-            : "needs the elevated agent");
+            // Several routes refuse an ordinary caller, so "absent" and "not allowed to look" are the same
+            // silence. Saying which it is matters: one is a hardware fact, the other is a thing the user can fix.
+            : !Elevation.IsElevated ? "needs the elevated agent"
+            : sensors.Problem.Length > 0 ? sensors.Problem : "no readable sensor on this machine");
 
-        Row("fan speeds", vendorFans, vendorFans ? null : "needs a vendor interface");
+        Row("fan speeds", vendorFans || sensors.HasFans,
+            vendorFans ? "vendor interface"
+            : sensors.HasFans ? string.Join(", ", hw!.Fans.Select(f => $"{f.Name} {f.Rpm}"))
+            : ec.NeedsElevation || !Elevation.IsElevated ? "needs the elevated agent"
+            : sensors.Problem.Length > 0 ? sensors.Problem : "this PC reports no fan");
+
+        Row("GPU temperature", haveNvml || sensors.HasGpuTemp,
+            haveNvml ? "NVIDIA driver" : sensors.HasGpuTemp ? "sensor chip" : "not published by this GPU's driver");
 
         Row("performance modes", vendorThermal || power.Available,
             vendorThermal ? "vendor thermal profiles" : power.Mechanism ?? "none available");
 
         using var fps = new Telemetry.FpsProvider();
-        Row("FPS", fps.Available, fps.ExePath ?? "install PresentMon to enable");
+        Row("FPS", fps.Available, fps.Available ? "Windows event tracing, no extra software" : fps.Detail);
 
         var audio = new Audio.AudioService();
         audio.Initialize();
@@ -172,25 +232,26 @@ internal static class Program
         Console.WriteLine("  Anything marked no is reported to the tablet as unavailable, and its");
         Console.WriteLine("  control is not drawn. See the README for what each one needs.");
         Console.WriteLine();
+        Console.WriteLine("  Logic checks (these must all pass on every machine):");
+        int failed = UnitChecks.Run((name, ok, detail) => Row(name, ok, detail));
+        Console.WriteLine();
 
         cast.Dispose();
         audio.Dispose();
         counters.Dispose();
-        return 0;
+        return failed == 0 ? 0 : 1;
     }
 
     /// <summary>
-    /// Tracks a process with PresentMon for a few seconds and reports the frame rate.
+    /// Measures a process's frame rate for a few seconds through the same code the agent uses.
     /// Give it a process name or pid; with no argument it uses the foreground window.
     /// Needs elevation, because ETW does.
     /// </summary>
     private static int ProbeFps(string? target)
     {
         using var fps = new CompanionDeck.Host.Telemetry.FpsProvider();
-        if (!fps.Available) { Log.Error("PresentMon not found"); return 1; }
-
-        Log.Info($"PresentMon: {fps.ExePath}");
-        Log.Info($"elevated: {Elevation.IsElevated}" + (Elevation.IsElevated ? "" : "  <-- ETW needs admin; expect this to fail"));
+        Log.Info($"elevated: {Elevation.IsElevated}");
+        if (!fps.Available) { Log.Error($"FPS unavailable: {fps.Detail}"); return 1; }
 
         int pid;
         if (int.TryParse(target, out var explicitPid)) pid = explicitPid;
@@ -211,14 +272,13 @@ internal static class Program
         catch { Log.Error($"pid {pid} is not running"); return 2; }
 
         Log.Info($"tracking {name} (pid {pid}) for 8 seconds - it must be rendering to produce frames");
-        fps.Track(pid);
-
         for (int i = 0; i < 8; i++)
         {
+            fps.Track(pid);
             Thread.Sleep(1000);
             var r = fps.Sample();
             Log.Info(r is null
-                ? $"  {i + 1}s: no frames yet"
+                ? $"  {i + 1}s: {fps.State}{(fps.Detail.Length > 0 ? " - " + fps.Detail : "")}"
                 : $"  {i + 1}s: {r.Fps:F1} fps, 1% low {r.OnePercentLow:F1}");
         }
 
@@ -313,6 +373,153 @@ internal static class Program
 
         Log.Info($"final foreground: {Foreground()}");
         return 0;
+    }
+
+    /// <summary>
+    /// Shows whether the Windows notification database can be read here, and what it looks like,
+    /// without printing a single notification: counts and column names only.
+    /// </summary>
+    private static int ProbeNotifications(string[] args)
+    {
+        Log.ToConsole = false;
+        string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Microsoft", "Windows", "Notifications", "wpndatabase.db");
+        Console.WriteLine();
+        Console.WriteLine($"  database: {path}");
+        Console.WriteLine($"  exists:   {File.Exists(path)}   size: {(File.Exists(path) ? new FileInfo(path).Length : 0)} bytes");
+        foreach (var side in new[] { "-wal", "-shm" })
+            Console.WriteLine($"  {side}:     {(File.Exists(path + side) ? new FileInfo(path + side).Length + " bytes" : "absent")}");
+
+        using var db = Notify.MiniSqlite.OpenReadOnly(path, out var err);
+        if (db is null) { Console.WriteLine($"  [ no] open: {err}"); return 1; }
+        Console.WriteLine("  [yes] opened read-only");
+
+        var tables = new List<string>();
+        db.Query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name", r => tables.Add(r.Text(0) ?? ""));
+        Console.WriteLine($"  tables:   {string.Join(", ", tables)}");
+
+        foreach (var t in new[] { "Notification", "NotificationHandler" })
+        {
+            var cols = new List<string>();
+            db.Query($"PRAGMA table_info({t})", r => cols.Add(r.Text(1) ?? ""));
+            Console.WriteLine($"  {t} columns: {string.Join(", ", cols)}");
+        }
+
+        long count = -1, newest = 0;
+        db.Query("SELECT COUNT(*), COALESCE(MAX(ArrivalTime),0) FROM Notification WHERE Type='toast'", r => { count = r.Int(0); newest = r.Int(1); });
+        Console.WriteLine($"  toast rows: {count}   newest arrived: {(newest > 0 ? DateTime.FromFileTime(newest).ToString("yyyy-MM-dd HH:mm:ss") : "never")}");
+        if (db.Error is not null) Console.WriteLine($"  [ no] query: {db.Error}");
+
+        // End to end, with a toast of our own so nobody else's is ever shown: post it the way an
+        // application would, and see whether it comes back out of the database as readable text.
+        if (args.Contains("--send-test-toast"))
+        {
+            var mirror = new Notify.NotificationMirror();
+            mirror.Probe();
+            Console.WriteLine($"  [{(mirror.Available ? "yes" : " no")}] reader accepts this Windows   {mirror.Problem}".TrimEnd());
+
+            const string aumid = @"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe";
+            try
+            {
+                var xml = new Windows.Data.Xml.Dom.XmlDocument();
+                xml.LoadXml("<toast><visual><binding template='ToastGeneric'><text>Companion Deck test</text>" +
+                            "<text>If this reaches the tablet, the mirror works.</text></binding></visual></toast>");
+                var toast = new Windows.UI.Notifications.ToastNotification(xml) { Tag = "cdtest", Group = "cdtest" };
+                Windows.UI.Notifications.ToastNotificationManager.CreateToastNotifier(aumid).Show(toast);
+                Thread.Sleep(3000);
+
+                var mine = mirror.Read(new HashSet<long>()).FirstOrDefault(i => i.Title == "Companion Deck test");
+                Console.WriteLine($"  [{(mine is not null ? "yes" : " no")}] our toast came back out of the database" +
+                                  (mine is null ? "" : $"   app '{mine.App}', body '{mine.Body}'"));
+
+                Windows.UI.Notifications.ToastNotificationManager.History.Remove("cdtest", "cdtest", aumid);
+                Thread.Sleep(2000);
+                bool gone = !mirror.Read(new HashSet<long>()).Any(i => i.Title == "Companion Deck test");
+                Console.WriteLine($"  [{(gone ? "yes" : " no")}] removing it removes it from what is read");
+            }
+            catch (Exception ex) { Console.WriteLine($"  [ no] could not post a test toast: {ex.Message}"); }
+        }
+
+        Console.WriteLine();
+        return db.Error is null ? 0 : 1;
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool GetCursorPos(out POINT p);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool SetCursorPos(int x, int y);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern int GetSystemMetrics(int i);
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct POINT { public int X, Y; }
+
+    /// <summary>
+    /// Drives the real Windows hooks end to end without anyone touching the machine: records the agent's
+    /// own harmless input (the F13 key and a small cursor move), checks what was captured, replays it, and
+    /// puts the cursor back. The hooks normally ignore input the agent injected; this turns that off.
+    /// </summary>
+    private static int ProbeMacro()
+    {
+        int failures = 0;
+        void Check(string name, bool ok, string detail = "")
+        {
+            Console.WriteLine($"  [{(ok ? "yes" : " no")}] {name,-42} {detail}".TrimEnd());
+            if (!ok) failures++;
+        }
+
+        Log.ToConsole = false;
+        Console.WriteLine();
+        var actions = new ActionService();
+        using var rec = new Actions.MacroRecorder { AcceptInjected = true };
+
+        GetCursorPos(out var origin);
+        int vx = GetSystemMetrics(76), vy = GetSystemMetrics(77), vw = GetSystemMetrics(78), vh = GetSystemMetrics(79);
+        int tx = Math.Clamp(origin.X + 40, vx, vx + vw - 2), ty = origin.Y;
+        int nx = (int)((long)(tx - vx) * 65535 / (vw - 1)), ny = (int)((long)(ty - vy) * 65535 / (vh - 1));
+
+        bool started = rec.Start(out var err);
+        Check("hooks install", started, err ?? "");
+        if (!started) return 1;
+        Check("recording flag is on", rec.Recording);
+
+        Thread.Sleep(250);
+        actions.Key(0x7C, false); Thread.Sleep(40); actions.Key(0x7C, true);   // F13: nothing listens to it
+        Thread.Sleep(80);
+        actions.MouseMove(nx, ny);
+        Thread.Sleep(250);
+
+        var events = rec.Stop() ?? new();
+        Check("recording stops", !rec.Recording);
+        Check("captured the key press and release", events.Any(e => e.K == "kd" && e.V == 0x7C) && events.Any(e => e.K == "ku" && e.V == 0x7C),
+              $"{events.Count} event(s)");
+
+        var move = events.LastOrDefault(e => e.K == "mm");
+        Check("captured the mouse move", move is not null);
+        if (move is not null)
+        {
+            // Within a few thousandths of the full range: the pointer rounds to whole pixels.
+            Check("normalised position matches the cursor", Math.Abs(move.X - nx) < 120 && Math.Abs(move.Y - ny) < 120,
+                  $"got {move.X},{move.Y} wanted {nx},{ny}");
+        }
+        Check("timestamps rise and fit the limits", events.Zip(events.Skip(1), (a, b) => b.T >= a.T).All(x => x) && events.All(e => e.T < 5000));
+        Check("what was captured passes the rules", MacroPlayer.Sanitise(events, out var why), why ?? "");
+
+        // Put the cursor back, then let the macro put it where it was recorded.
+        SetCursorPos(origin.X, origin.Y);
+        Thread.Sleep(100);
+        var replayErr = MacroPlayer.PlayAsync(events, actions, CancellationToken.None).GetAwaiter().GetResult();
+        Check("replay is accepted by Windows", replayErr is null, replayErr ?? "");
+        Thread.Sleep(100);
+        GetCursorPos(out var after);
+        Check("replay moved the cursor back to the recording", Math.Abs(after.X - tx) <= 2 && Math.Abs(after.Y - ty) <= 2,
+              $"at {after.X},{after.Y}, recorded {tx},{ty}");
+        SetCursorPos(origin.X, origin.Y);
+
+        // And the hooks must be gone: a second recording starts and ends cleanly, and sees nothing.
+        bool again = rec.Start(out err);
+        Thread.Sleep(150);
+        var none = rec.Stop();
+        Check("a second recording starts and ends cleanly", again && none is not null);
+        Console.WriteLine();
+        return failures == 0 ? 0 : 1;
     }
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]

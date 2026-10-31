@@ -7,7 +7,7 @@ namespace CompanionDeck.Host.Actions;
 /// The fixed set of things the tablet is allowed to do to Windows. This is an allow-list on
 /// purpose: the tablet names an action, never a command line.
 /// </summary>
-public sealed class ActionService
+public sealed class ActionService : IInputSink
 {
 
     [StructLayout(LayoutKind.Sequential)]
@@ -75,13 +75,12 @@ public sealed class ActionService
     private const ushort VkR = 0x52;
     private const ushort VkZ = 0x5A;
     /// <summary>Top-row digits. VK_1..VK_4 are contiguous from 0x31.</summary>
-    private const ushort VkDigit1 = 0x31;
 
     /// <summary>Keys that live in the E0 range and must carry the extended flag.</summary>
     private static bool IsExtended(ushort vk) => vk is VkLWin or 0x5C or 0x2D or 0x2E
         or 0x21 or 0x22 or 0x23 or 0x24 or 0x25 or 0x26 or 0x27 or 0x28;
 
-    private static INPUT Key(ushort vk, bool up)
+    private static INPUT KeyInput(ushort vk, bool up)
     {
         uint flags = up ? KeyEventKeyUp : 0;
         if (IsExtended(vk)) flags |= KeyEventExtended;
@@ -110,10 +109,10 @@ public sealed class ActionService
     private static bool Chord(params ushort[] keys)
     {
         var down = new INPUT[keys.Length];
-        for (int i = 0; i < keys.Length; i++) down[i] = Key(keys[i], false);
+        for (int i = 0; i < keys.Length; i++) down[i] = KeyInput(keys[i], false);
 
         var up = new INPUT[keys.Length];
-        for (int i = 0; i < keys.Length; i++) up[i] = Key(keys[keys.Length - 1 - i], true);
+        for (int i = 0; i < keys.Length; i++) up[i] = KeyInput(keys[keys.Length - 1 - i], true);
 
         int size = Marshal.SizeOf<INPUT>();
         uint sentDown = SendInput((uint)down.Length, down, size);
@@ -131,26 +130,87 @@ public sealed class ActionService
     }
 
 
-    /// <summary>
-    /// Taps a single key and releases it. Quick chat is a sequence of independent presses,
-    /// not a chord: holding the first digit while pressing the second selects nothing.
-    /// </summary>
-    private static bool Tap(ushort vk)
+    /// <summary>Presses a chord already parsed and validated by <see cref="KeyNames"/>.</summary>
+    public bool Press(ushort[] keys) => keys.Length > 0 && Chord(keys);
+
+    // ---- single events, for replaying a recorded macro. These are the IInputSink the player drives.
+
+    private const uint MiMove = 0x0001, MiLeftDown = 0x0002, MiLeftUp = 0x0004,
+                       MiRightDown = 0x0008, MiRightUp = 0x0010, MiMiddleDown = 0x0020,
+                       MiMiddleUp = 0x0040, MiWheel = 0x0800, MiVirtualDesk = 0x4000,
+                       MiAbsolute = 0x8000;
+    private const uint InputMouse = 0;
+
+    private static bool SendOne(INPUT input) =>
+        SendInput(1, new[] { input }, Marshal.SizeOf<INPUT>()) == 1;
+
+    private static INPUT Mouse(uint flags, int dx, int dy, uint data) => new()
     {
-        int size = Marshal.SizeOf<INPUT>();
-        var down = new[] { Key(vk, false) };
-        var up = new[] { Key(vk, true) };
+        type = InputMouse,
+        U = new InputUnion { mi = new MOUSEINPUT { dx = dx, dy = dy, mouseData = data, dwFlags = flags } },
+    };
 
-        if (SendInput(1, down, size) != 1) return false;
-        Thread.Sleep(25);
-        return SendInput(1, up, size) == 1;
-    }
+    public bool Key(ushort vk, bool up) => SendOne(KeyInput(vk, up));
 
+    /// <summary>Position in 0..65535 across the whole virtual desktop.</summary>
+    public bool MouseMove(int x, int y) => SendOne(Mouse(MiMove | MiAbsolute | MiVirtualDesk, x, y, 0));
+
+    public bool MouseButton(int button, bool up) => SendOne(Mouse(button switch
+    {
+        1 => up ? MiLeftUp : MiLeftDown,
+        2 => up ? MiRightUp : MiRightDown,
+        _ => up ? MiMiddleUp : MiMiddleDown,
+    }, 0, 0, 0));
+
+    public bool Wheel(int delta) => SendOne(Mouse(MiWheel, 0, 0, unchecked((uint)delta)));
 
     /// <summary>
     /// Overlay and capture hotkeys. Named ids only - the chord for each one is fixed here,
     /// so the tablet cannot ask for an arbitrary key combination.
     /// </summary>
+    /// <summary>
+    /// Which of the shortcuts below this PC can actually use. Offering an NVIDIA overlay on an AMD
+    /// laptop, or Steam's on a PC with no Steam, is a button that can never work, so the tablet is
+    /// told only about the ones whose software is present.
+    /// </summary>
+    public List<string> AvailableGameShortcuts(bool nvidiaGpu)
+    {
+        var list = new List<string> { "record", "gamebar" };   // Windows' own Game Bar, on every supported Windows
+
+        if (nvidiaGpu)
+        {
+            string pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            bool overlay = Directory.Exists(Path.Combine(pf, "NVIDIA Corporation", "NVIDIA app"))
+                        || Directory.Exists(Path.Combine(pf, "NVIDIA Corporation", "NVIDIA GeForce Experience"))
+                        || System.Diagnostics.Process.GetProcessesByName("NVIDIA Overlay").Length > 0;
+            if (overlay) list.Add("nvoverlay");
+
+            bool panel = File.Exists(Path.Combine(pf, "NVIDIA Corporation", "Control Panel Client", "nvcplui.exe"))
+                      || PackageInstalled("NVIDIACorp.NVIDIAControlPanel");
+            if (panel) list.Add("nvpanel");
+        }
+
+        try
+        {
+            using var steam = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Valve\Steam");
+            if (steam?.GetValue("SteamPath") is string) list.Add("steamoverlay");
+        }
+        catch { /* not installed, or unreadable: not offered */ }
+
+        return list;
+    }
+
+    private static bool PackageInstalled(string namePrefix)
+    {
+        try
+        {
+            using var k = Microsoft.Win32.Registry.ClassesRoot.OpenSubKey(
+                @"Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Packages");
+            return k?.GetSubKeyNames().Any(n => n.StartsWith(namePrefix, StringComparison.OrdinalIgnoreCase)) == true;
+        }
+        catch { return false; }
+    }
+
     public bool GameShortcut(string id) => id switch
     {
         // Xbox Game Bar, and its recorder. Win+Alt+R toggles, so one button both starts

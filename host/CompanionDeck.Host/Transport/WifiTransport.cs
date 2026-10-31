@@ -27,8 +27,19 @@ public sealed class WifiTransport
 
     public Func<DeckLink, Task>? OnLink { get; set; }
 
-    /// <summary>True while a tablet is connected over this transport.</summary>
-    public volatile bool Connected;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<DeckLink, byte> _links = new();
+
+    /// <summary>
+    /// How many strangers may be mid-handshake at once. Each is dropped after a few seconds, but an
+    /// open listener should not let one machine hold hundreds of sockets while it waits.
+    /// </summary>
+    private const int MaxUnproven = 8;
+
+    /// <summary>
+    /// True while a tablet that has proved it holds the key is connected over this transport.
+    /// A connection that has not is not a tablet yet, and must not silence the beacon.
+    /// </summary>
+    public bool Connected => _links.Keys.Any(l => l.Authenticated);
 
     public WifiTransport(Func<bool> usbActive) => _usbActive = usbActive;
 
@@ -75,24 +86,39 @@ public sealed class WifiTransport
                 continue;
             }
 
-            tcp.NoDelay = true;
-            var peer = (tcp.Client.RemoteEndPoint as IPEndPoint)?.Address.ToString() ?? "?";
-            Log.Info($"network link up from {peer}");
-
-            Connected = true;
-            try
+            if (_links.Keys.Count(l => !l.Authenticated) >= MaxUnproven)
             {
-                var link = new DeckLink(tcp.GetStream(), "wifi", tcp);
-                link.Start();
-                if (OnLink is not null) await OnLink(link).ConfigureAwait(false);
-            }
-            catch (Exception ex) { Log.Debug($"network session: {ex.Message}"); }
-            finally
-            {
-                Connected = false;
+                Log.Debug("refusing network connection: too many peers mid-handshake");
                 try { tcp.Close(); } catch { }
-                Log.Info("network link down");
+                continue;
             }
+
+            // Each connection gets its own task. They used to be served one after another, which
+            // would let a peer that connects and says nothing keep the real tablet waiting.
+            _ = Task.Run(() => ServeOneAsync(tcp));
+        }
+    }
+
+    private async Task ServeOneAsync(TcpClient tcp)
+    {
+        tcp.NoDelay = true;
+        var peer = (tcp.Client.RemoteEndPoint as IPEndPoint)?.Address.ToString() ?? "?";
+        Log.Info($"network link up from {peer}");
+
+        DeckLink? link = null;
+        try
+        {
+            link = new DeckLink(tcp.GetStream(), "wifi", tcp);
+            _links[link] = 0;
+            link.Start();
+            if (OnLink is not null) await OnLink(link).ConfigureAwait(false);
+        }
+        catch (Exception ex) { Log.Debug($"network session: {ex.Message}"); }
+        finally
+        {
+            if (link is not null) _links.TryRemove(link, out _);
+            try { tcp.Close(); } catch { }
+            Log.Info("network link down");
         }
     }
 

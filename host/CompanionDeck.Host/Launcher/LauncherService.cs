@@ -20,7 +20,7 @@ public sealed partial class LauncherService
     private readonly AssetCache _assets;
     private List<Entry> _entries = new();
 
-    public LauncherPrefs Prefs { get; } = new();
+    public LauncherPrefs Prefs { get; }
 
     public sealed class Entry
     {
@@ -31,9 +31,18 @@ public sealed partial class LauncherService
         public required string Target { get; init; }   // URI or path handed to ShellExecute
         public string? IconKey { get; set; }
         public string? ExeName { get; init; }          // for "is it running" and game detection
+        /// <summary>The folder the game is installed in. Recognises the game's real process whatever it is called.</summary>
+        public string? InstallDir { get; init; }
     }
 
-    public LauncherService(AssetCache assets) => _assets = assets;
+    public LauncherService(AssetCache assets, string? prefsPath = null)
+    {
+        _assets = assets;
+        Prefs = new LauncherPrefs(prefsPath);
+    }
+
+    /// <summary>For the logic checks: a catalogue without scanning the machine.</summary>
+    internal void SetEntries(IEnumerable<Entry> entries) => _entries = entries.ToList();
 
     public IReadOnlyList<Entry> Entries => _entries;
 
@@ -42,6 +51,24 @@ public sealed partial class LauncherService
                 .Select(e => e.ExeName!);
 
     public Entry? Find(string id) => _entries.FirstOrDefault(e => e.Id == id);
+
+    /// <summary>
+    /// The game a running process belongs to: by program name where the store recorded one, otherwise by
+    /// whether the program lives inside the game's install folder.
+    /// </summary>
+    public Entry? GameForProcess(int pid, string? processName)
+    {
+        var games = _entries.Where(e => e.Kind == "game").ToList();
+        if (processName is { Length: > 0 })
+            foreach (var g in games)
+                if (g.ExeName is { Length: > 0 } && string.Equals(g.ExeName, processName, StringComparison.OrdinalIgnoreCase))
+                    return g;
+
+        if (!games.Any(g => g.InstallDir is not null)) return null;
+        var path = Context.ProcessPaths.PathOf(pid);
+        if (path is null) return null;
+        return games.FirstOrDefault(g => g.InstallDir is not null && Context.ProcessPaths.IsInside(path, g.InstallDir));
+    }
 
 
     public void Scan()
@@ -77,6 +104,9 @@ public sealed partial class LauncherService
     [GeneratedRegex("\"name\"\\s+\"([^\"]+)\"", RegexOptions.IgnoreCase)]
     private static partial Regex NameRegex();
 
+    [GeneratedRegex("\"installdir\"\\s+\"([^\"]+)\"", RegexOptions.IgnoreCase)]
+    private static partial Regex InstallDirRegex();
+
     private IEnumerable<Entry> ScanSteam()
     {
         string? steam = SteamPath();
@@ -103,6 +133,7 @@ public sealed partial class LauncherService
                         name.Groups[1].Value.Contains("Steamworks", StringComparison.OrdinalIgnoreCase))
                         continue;
 
+                    var installDir = InstallDirRegex().Match(text);
                     entry = new Entry
                     {
                         Id = "steam:" + appId,
@@ -110,6 +141,8 @@ public sealed partial class LauncherService
                         Kind = "game",
                         Source = "steam",
                         Target = $"steam://rungameid/{appId}",
+                        InstallDir = installDir.Success
+                            ? Path.Combine(library, "steamapps", "common", installDir.Groups[1].Value) : null,
                     };
                     entry.IconKey = SteamArtwork(steam, appId);
                 }
@@ -212,6 +245,7 @@ public sealed partial class LauncherService
                     Source = "epic",
                     Target = $"com.epicgames.launcher://apps/{appName}?action=launch&silent=true",
                     ExeName = exe is null ? null : Path.GetFileNameWithoutExtension(exe),
+                    InstallDir = Str(root, "InstallLocation"),
                 };
 
                 string? install = Str(root, "InstallLocation");
@@ -321,13 +355,18 @@ public sealed partial class LauncherService
     }
 
 
-    public AppsState Snapshot()
+    /// <param name="playedAtMs">When a game was last in front, from the playtime record, or null.
+    /// Counted alongside launches, because a game started from Steam never passed through here.</param>
+    public AppsState Snapshot(Func<string, long?>? playedAtMs = null)
     {
         var running = RunningProcessNames();
+        var runningPaths = _entries.Any(e => e.InstallDir is not null) ? RunningImagePaths() : new List<string>();
 
-        // Pinned entries first in the order they were pinned, then games, then everything
-        // else alphabetically. Hidden entries stay in the payload so the tablet's edit mode
-        // can offer to restore them; it filters them out of the normal view.
+        // Pinned entries first in the order they were pinned. Then whatever this person actually
+        // uses, most recent first; then games; then the rest alphabetically. A PC with no history
+        // therefore falls back to the plain order, and one with history leads with its own habits.
+        // Hidden entries stay in the payload so the tablet's edit mode can offer to restore them;
+        // it filters them out of the normal view.
         var items = _entries.Select(e => new LaunchTarget
         {
             Id = e.Id,
@@ -335,17 +374,34 @@ public sealed partial class LauncherService
             Kind = e.Kind,
             Source = e.Source,
             IconKey = e.IconKey,
-            Running = e.ExeName is { Length: > 0 } && running.Contains(e.ExeName),
+            Running = (e.ExeName is { Length: > 0 } && running.Contains(e.ExeName))
+                      || (e.InstallDir is not null && runningPaths.Any(p => Context.ProcessPaths.IsInside(p, e.InstallDir))),
             Fav = Prefs.IsFavourite(e.Id),
             Hidden = Prefs.IsHidden(e.Id),
         })
         .OrderBy(t => t.Fav ? 0 : 1)
         .ThenBy(t => t.Fav ? Prefs.FavouriteRank(t.Id) : 0)
+        .ThenByDescending(t => Math.Max(Prefs.LastUsedMs(t.Id), playedAtMs?.Invoke(t.Id) ?? 0))
         .ThenBy(t => t.Kind == "game" ? 0 : 1)
         .ThenBy(t => t.Name, StringComparer.OrdinalIgnoreCase)
         .ToList();
 
         return new AppsState { Items = items };
+    }
+
+    private static List<string> RunningImagePaths()
+    {
+        var list = new List<string>();
+        try
+        {
+            foreach (var p in Process.GetProcesses())
+            {
+                try { if (Context.ProcessPaths.PathOf(p.Id) is { } path) list.Add(path); }
+                finally { p.Dispose(); }
+            }
+        }
+        catch (Exception ex) { Log.Debug($"process paths: {ex.Message}"); }
+        return list;
     }
 
     private static HashSet<string> RunningProcessNames()

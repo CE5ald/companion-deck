@@ -37,6 +37,11 @@ public sealed class MediaSourceService
         public string? Url { get; init; }
         /// <summary>Process name used to show a "running" pip, when we know it.</summary>
         public string? ExeName { get; init; }
+        /// <summary>For a web service: which service it is, so the tablet can draw that identity.</summary>
+        public string? Service { get; init; }
+        /// <summary>For a web service: the browser that will open it, shown as a badge and never as the identity.</summary>
+        public string? Via { get; init; }
+        public string? ViaIconKey { get; init; }
     }
 
     public bool Any => _sources.Count > 0;
@@ -96,22 +101,24 @@ public sealed class MediaSourceService
         // desktop client - different account session, different audio session, and it is
         // what someone reaches for when the desktop client is signed into another account.
         // So the browser-backed entries are listed separately rather than collapsed.
+        //
+        // The browser is whatever Windows says is the default, and it is only ever the vehicle:
+        // the entry stays "Spotify Web", and the browser rides along as a badge.
         var browser = ResolveBrowser();
 
-        foreach (var (id, name, url) in new[]
+        foreach (var (id, name, url, service) in new[]
                  {
-                     ("src:spotify-web", "Spotify Web", "https://open.spotify.com"),
-                     ("src:ytmusic", "YouTube Music", "https://music.youtube.com"),
+                     ("src:spotify-web", "Spotify Web", "https://open.spotify.com", "spotify"),
+                     ("src:ytmusic", "YouTube Music", "https://music.youtube.com", "ytmusic"),
                  })
         {
             list.Add(new Resolved
             {
-                Id = id, Name = browser is null ? name : $"{name}",
-                Kind = "web",
-                // With no browser identified we still publish the entry and let the shell
-                // pick the default handler; ShellExecute on an http URL always resolves.
-                Exe = browser?.Path, Url = url,
-                ExeName = browser?.ProcessName, IconKey = browser?.IconKey,
+                Id = id, Name = name, Kind = "web", Service = service,
+                // Opened through the shell, which hands the address to the default browser exactly as
+                // clicking a link would, profile and all.
+                Url = url,
+
             });
         }
 
@@ -138,7 +145,7 @@ public sealed class MediaSourceService
     }
 
     private sealed record AppHit(string Path, string? IconKey);
-    private sealed record BrowserHit(string Path, string ProcessName, string? IconKey);
+    private sealed record BrowserHit(string Path, string DisplayName, string? IconKey);
 
     /// <summary>
     /// Finds a program by its registered App Paths entry, falling back to a launcher
@@ -158,22 +165,18 @@ public sealed class MediaSourceService
         return entry is null ? null : new AppHit(entry.Target, entry.IconKey);
     }
 
+    private readonly Dictionary<string, string?> _browserIcons = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Which browser is the default right now. Cheap: Windows is asked at most every 30 seconds.</summary>
+    public string BrowserKey => DefaultBrowser.Resolve()?.Path ?? "";
+
     private BrowserHit? ResolveBrowser()
     {
-        // Brave first because the user asked for it by name; the rest are the browsers a
-        // web player is actually likely to be opened in.
-        foreach (var (exe, proc) in new[]
-                 {
-                     ("brave.exe", "brave"),
-                     ("chrome.exe", "chrome"),
-                     ("msedge.exe", "msedge"),
-                     ("firefox.exe", "firefox"),
-                 })
-        {
-            if (AppPath(exe) is not { } path) continue;
-            return new BrowserHit(path, proc, IconExtractor.GetPng(path) is { } png ? _assets.Put(png) : null);
-        }
-        return null;
+        if (DefaultBrowser.Resolve() is not { } b) return null;
+        // The icon is extracted once per browser, not once per call.
+        if (!_browserIcons.TryGetValue(b.Path, out var icon))
+            _browserIcons[b.Path] = icon = IconExtractor.GetPng(b.Path) is { } png ? _assets.Put(png) : null;
+        return new BrowserHit(b.Path, b.DisplayName, icon);
     }
 
     /// <summary>
@@ -203,6 +206,9 @@ public sealed class MediaSourceService
     public MediaSourcesState Snapshot()
     {
         var running = RunningProcessNames();
+        // Asked every time, not remembered from the scan: the user can change their default browser while
+        // this runs, and the badge should follow.
+        var browser = ResolveBrowser();
 
         return new MediaSourcesState
         {
@@ -212,7 +218,12 @@ public sealed class MediaSourceService
                 Name = s.Name,
                 Kind = s.Kind,
                 IconKey = s.IconKey,
-                Running = s.ExeName is { Length: > 0 } && running.Contains(s.ExeName),
+                Service = s.Service,
+                Via = s.Kind == "web" ? browser?.DisplayName : null,
+                ViaIconKey = s.Kind == "web" ? browser?.IconKey : null,
+                // A web service is "running" only if a browser happens to be open, which says nothing
+                // about it, so it never claims to be.
+                Running = s.Kind != "web" && s.ExeName is { Length: > 0 } && running.Contains(s.ExeName),
             }).ToList(),
         };
     }
@@ -248,18 +259,11 @@ public sealed class MediaSourceService
         {
             ProcessStartInfo psi;
 
-            if (src.Kind == "web" && src.Exe is { } browser)
+            if (src.Kind == "web" || (src.Url is not null && src.Exe is null))
             {
-                // The address is ours, not the tablet's - it is passed as a separate
-                // argument rather than concatenated, so nothing can be smuggled into the
-                // browser's command line.
-                psi = new ProcessStartInfo(browser) { UseShellExecute = false };
-                psi.ArgumentList.Add(src.Url!);
-            }
-            else if (src.Url is { } target && src.Exe is null)
-            {
-                // A URL with no browser, or a folder: let the shell pick the handler.
-                psi = new ProcessStartInfo(target) { UseShellExecute = true };
+                // An address (ours, not the tablet's) or a folder: the shell picks the handler, which
+                // for a web address is the user's own default browser.
+                psi = new ProcessStartInfo(src.Url!) { UseShellExecute = true };
             }
             else
             {

@@ -38,6 +38,16 @@ public sealed class DeckLink : IAsyncDisposable
     public string Transport { get; }
     public ClientHello? Hello { get; private set; }
 
+    /// <summary>
+    /// The cable is trusted by being a cable. A network peer is not served anything until it has
+    /// proved it holds the pairing key, and until then it cannot displace a working link.
+    /// </summary>
+    public bool Authenticated { get; set; }
+    public string? HostNonce { get; set; }
+    public int AuthFailures { get; set; }
+    /// <summary>Set by the server: takes over the PC for this link once it is allowed to.</summary>
+    public Action? Claim { get; set; }
+
     /// <summary>Fires for each inbound JSON message, with the parsed "type" discriminator.</summary>
     public event Func<string, JsonDocument, Task>? OnMessage;
 
@@ -45,6 +55,7 @@ public sealed class DeckLink : IAsyncDisposable
     {
         _stream = stream;
         Transport = transport;
+        Authenticated = transport == "usb";
         _owner = owner;
     }
 

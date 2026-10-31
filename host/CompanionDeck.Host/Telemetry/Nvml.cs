@@ -27,6 +27,11 @@ public sealed class Nvml : IDisposable
     [DllImport(Dll, EntryPoint = "nvmlDeviceGetClockInfo")] private static extern int GetClock(IntPtr d, uint type, out uint mhz);
     [DllImport(Dll, EntryPoint = "nvmlDeviceGetName")] private static extern int GetName(IntPtr d, byte[] name, uint len);
     [DllImport(Dll, EntryPoint = "nvmlDeviceGetFanSpeed")] private static extern int GetFan(IntPtr d, out uint percent);
+    [DllImport(Dll, EntryPoint = "nvmlDeviceGetCurrentClocksThrottleReasons")] private static extern int GetThrottle(IntPtr d, out ulong reasons);
+
+    // The bits NVML reports, from nvml.h.
+    private const ulong ReasonSwPowerCap = 0x4, ReasonHwSlowdown = 0x8, ReasonSwThermal = 0x20,
+                        ReasonHwThermal = 0x40, ReasonHwPowerBrake = 0x80;
 
     private const uint TemperatureGpu = 0;
     private const uint ClockGraphics = 0;
@@ -84,6 +89,24 @@ public sealed class Nvml : IDisposable
         if (GetFan(_device, out var fan) == 0) s.FanPercent = fan;
 
         return s;
+    }
+
+    /// <summary>
+    /// Why the GPU is holding its clock below what it could do right now: "power", "heat", "both", or
+    /// null when it is not being held back. An idle GPU clocking down is not throttling, so that
+    /// reason is ignored.
+    /// </summary>
+    public string? ThrottleReason()
+    {
+        if (!_ready) return null;
+        try
+        {
+            if (GetThrottle(_device, out var r) != 0) return null;
+            bool power = (r & (ReasonSwPowerCap | ReasonHwPowerBrake)) != 0;
+            bool heat = (r & (ReasonSwThermal | ReasonHwThermal | ReasonHwSlowdown)) != 0;
+            return power && heat ? "both" : power ? "power" : heat ? "heat" : null;
+        }
+        catch (EntryPointNotFoundException) { return null; }
     }
 
     public void Dispose()

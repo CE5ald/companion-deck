@@ -57,10 +57,13 @@ Write-Host "  $env:COMPUTERNAME  /  Windows $([Environment]::OSVersion.Version)"
 # ------------------------------------------------------------- Windows check
 
 $build = [Environment]::OSVersion.Version.Build
-if ($build -lt 19041) {
-    Write-Bad "Windows 10 2004 (build 19041) or newer is required; this is build $build."
-    Write-Step 'The media-session APIs the dashboard uses do not exist on older builds.'
+if ($build -lt 17763) {
+    Write-Bad "Windows 10 version 1809 (build 17763) or newer is required; this is build $build."
+    Write-Step 'Older builds are not supported by .NET 8 and the Windows APIs this uses.'
     exit 1
+}
+if ($build -lt 19041) {
+    Write-Miss "Windows build $build predates 2004: it should run, but the now-playing media card needs 2004 or newer and is untested here."
 }
 Write-Ok "Windows build $build"
 

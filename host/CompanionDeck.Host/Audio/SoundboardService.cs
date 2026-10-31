@@ -53,6 +53,7 @@ public sealed class SoundboardService : IDisposable
         public string Id = "";
         public string File = "";
         public string Name = "";
+        public string Dir = "";       // the sub-folder it sits in on disk, if any
         public float[]? Samples;      // decoded, 48k stereo interleaved; null until first play
         public double Seconds;
         public bool Broken;
@@ -115,7 +116,16 @@ public sealed class SoundboardService : IDisposable
         public string? Route { get; set; }   // both | mic | ears
         public int? Gain { get; set; }       // 0-100
         public int? Order { get; set; }
+        public string? Folder { get; set; }  // chosen on the tablet; wins over the folder on disk
+        public string? Color { get; set; }
+        public bool Loop { get; set; }
     }
+
+    private static readonly string[] Colours = { "pink", "violet", "amber", "green", "red", "blue" };
+
+    /// <summary>Names for a folder made on the tablet: letters, digits, spaces, dashes. No paths.</summary>
+    private static bool ValidFolder(string name) =>
+        name.Length <= 24 && name.All(c => char.IsLetterOrDigit(c) || c is ' ' or '-' or '_');
 
     public void Initialize()
     {
@@ -130,6 +140,7 @@ public sealed class SoundboardService : IDisposable
             _watcher = new FileSystemWatcher(Folder)
             {
                 NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite,
+                IncludeSubdirectories = true,
                 EnableRaisingEvents = true,
             };
             FileSystemEventHandler onChange = (_, _) => Debounce();
@@ -156,7 +167,7 @@ public sealed class SoundboardService : IDisposable
         try
         {
             var found = new Dictionary<string, Clip>(StringComparer.Ordinal);
-            foreach (var path in Directory.EnumerateFiles(Folder))
+            foreach (var path in ClipFiles())
             {
                 if (!Extensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase)) continue;
                 string id = IdFor(path);
@@ -170,7 +181,7 @@ public sealed class SoundboardService : IDisposable
                         continue;
                     }
                 }
-                found[id] = new Clip { Id = id, File = path, Name = Path.GetFileNameWithoutExtension(path) };
+                found[id] = new Clip { Id = id, File = path, Name = Path.GetFileNameWithoutExtension(path), Dir = DirOf(path) };
             }
 
             lock (_gate)
@@ -182,10 +193,27 @@ public sealed class SoundboardService : IDisposable
         catch (Exception ex) { Log.Warn($"soundboard scan: {ex.Message}"); }
     }
 
-    /// <summary>Stable across restarts and independent of position in the folder.</summary>
+    /// <summary>Clips in the folder and in folders inside it, two levels down at most.</summary>
+    private static IEnumerable<string> ClipFiles() =>
+        Directory.EnumerateFiles(Folder, "*", SearchOption.AllDirectories)
+            .Where(p => Path.GetRelativePath(Folder, p).Count(c => c is '\\' or '/') <= 2);
+
+    /// <summary>The first sub-folder a file sits in, or empty for one in the soundboard folder itself.</summary>
+    private static string DirOf(string path)
+    {
+        var rel = Path.GetRelativePath(Folder, path);
+        int cut = rel.IndexOfAny(new[] { '\\', '/' });
+        return cut < 0 ? "" : rel[..cut];
+    }
+
+    /// <summary>
+    /// Stable across restarts and independent of position in the folder. Taken from the path inside
+    /// the soundboard folder, which for a file directly in it is just the name, as it always was: a
+    /// clip that existed before folders keeps its id, its name, its level and its routing.
+    /// </summary>
     private static string IdFor(string path)
     {
-        var bytes = Encoding.UTF8.GetBytes(Path.GetFileName(path).ToLowerInvariant());
+        var bytes = Encoding.UTF8.GetBytes(Path.GetRelativePath(Folder, path).ToLowerInvariant());
         return System.Convert.ToHexString(MD5.HashData(bytes))[..12].ToLowerInvariant();
     }
 
@@ -207,6 +235,9 @@ public sealed class SoundboardService : IDisposable
                     Broken = c.Broken,
                     Silent = c.Silent,
                     Playing = _playing.Any(p => p.ClipId == c.Id && !p.Finished),
+                    Group = m?.Folder ?? c.Dir,
+                    Color = m?.Color ?? "",
+                    Loop = m?.Loop ?? false,
                 };
             })
             .OrderBy(i => i.Order)
@@ -228,8 +259,17 @@ public sealed class SoundboardService : IDisposable
             _meta.TryGetValue(id, out meta);
         }
 
+        // A looping clip is a switch: pressing it while it plays stops it.
+        if (meta?.Loop == true)
+        {
+            bool already;
+            lock (_gate) already = _playing.Any(p => p.ClipId == id && !p.Finished);
+            if (already) { StopClip(id); return true; }
+        }
+
         if (!EnsureDecoded(clip)) return false;
 
+        bool loop = meta?.Loop == true;
         string route = meta?.Route ?? "both";
         // The pad's own level multiplies the normalisation rather than replacing it, so
         // turning one clip down still leaves it matched relative to the others.
@@ -241,7 +281,7 @@ public sealed class SoundboardService : IDisposable
         bool sentToMic = false;
         if (wantMic)
         {
-            var p = new ClipPlayer(clip.Id, clip.Samples!, gain);
+            var p = new ClipPlayer(clip.Id, clip.Samples!, gain, loop);
             if (_cast.TryAddToCast(p))
             {
                 sentToMic = true;
@@ -256,13 +296,13 @@ public sealed class SoundboardService : IDisposable
 
         // "mic" routing still plays locally when the cast is not armed, rather than
         // producing silence and looking broken.
-        if (wantEars || (wantMic && !sentToMic)) PlayToEars(clip, gain);
+        if (wantEars || (wantMic && !sentToMic)) PlayToEars(clip, gain, loop);
 
         Changed?.Invoke();
         return true;
     }
 
-    private void PlayToEars(Clip clip, float gain)
+    private void PlayToEars(Clip clip, float gain, bool loop)
     {
         try
         {
@@ -302,7 +342,7 @@ public sealed class SoundboardService : IDisposable
                     Log.Info($"soundboard monitor on {device.FriendlyName}");
                 }
 
-                var p = new ClipPlayer(clip.Id, clip.Samples!, gain);
+                var p = new ClipPlayer(clip.Id, clip.Samples!, gain, loop);
                 _monitorMix!.Add(p);
                 Track(p, () => { try { _monitorMix?.Remove(p); } catch { } });
             }
@@ -348,6 +388,15 @@ public sealed class SoundboardService : IDisposable
                 StopMonitor();
             }, null, MonitorIdleMs, Timeout.Infinite);
         }
+    }
+
+    /// <summary>Stops one clip wherever it is playing.</summary>
+    public void StopClip(string id)
+    {
+        ClipPlayer[] mine;
+        lock (_gate) mine = _playing.Where(p => p.ClipId == id).ToArray();
+        foreach (var p in mine) { p.Cancel(); p.ForceComplete(); }
+        Changed?.Invoke();
     }
 
     /// <summary>
@@ -448,6 +497,27 @@ public sealed class SoundboardService : IDisposable
 
     public bool SetGain(string id, int gain) => Mutate(id, m => m.Gain = Math.Clamp(gain, 0, 100));
 
+    /// <summary>Files a clip under a folder name of the person's choosing; empty puts it back where it is on disk.</summary>
+    public bool SetFolder(string id, string name)
+    {
+        name = name.Trim();
+        if (!ValidFolder(name)) return false;
+        return Mutate(id, m => m.Folder = name.Length == 0 ? null : name);
+    }
+
+    public bool SetColor(string id, string color)
+    {
+        if (color.Length > 0 && !Colours.Contains(color)) return false;
+        return Mutate(id, m => m.Color = color.Length == 0 ? null : color);
+    }
+
+    public bool SetLoop(string id, bool loop)
+    {
+        // A loop that was playing as a one-shot would otherwise carry on forever without a way to stop it.
+        if (!loop) StopClip(id);
+        return Mutate(id, m => m.Loop = loop);
+    }
+
     private bool Mutate(string id, Action<Meta> apply)
     {
         lock (_gate)
@@ -538,6 +608,7 @@ public sealed class SoundboardService : IDisposable
     {
         private readonly float[] _samples;
         private readonly float _gain;
+        private readonly bool _loop;
         private int _pos;
         private volatile bool _cancelled;
         private int _done;
@@ -546,9 +617,9 @@ public sealed class SoundboardService : IDisposable
         public bool Finished => _done != 0;
         public event Action? Completed;
 
-        public ClipPlayer(string clipId, float[] samples, float gain)
+        public ClipPlayer(string clipId, float[] samples, float gain, bool loop = false)
         {
-            ClipId = clipId; _samples = samples; _gain = gain;
+            ClipId = clipId; _samples = samples; _gain = gain; _loop = loop;
         }
 
         public WaveFormat WaveFormat => MixFormat.Format;
@@ -566,15 +637,24 @@ public sealed class SoundboardService : IDisposable
         {
             if (_cancelled) { Complete(); return 0; }
 
-            int left = _samples.Length - _pos;
-            if (left <= 0) { Complete(); return 0; }
+            int written = 0;
+            while (written < count)
+            {
+                int left = _samples.Length - _pos;
+                if (left <= 0)
+                {
+                    // A loop starts again at once, in the same buffer, so there is no gap at the seam.
+                    if (_loop && _samples.Length > 0) { _pos = 0; continue; }
+                    break;
+                }
+                int n = Math.Min(count - written, left);
+                for (int i = 0; i < n; i++) buffer[offset + written + i] = _samples[_pos + i] * _gain;
+                _pos += n;
+                written += n;
+            }
 
-            int n = Math.Min(count, left);
-            for (int i = 0; i < n; i++) buffer[offset + i] = _samples[_pos + i] * _gain;
-            _pos += n;
-
-            if (_pos >= _samples.Length) Complete();
-            return n;
+            if (written == 0 || (!_loop && _pos >= _samples.Length)) Complete();
+            return written;
         }
 
         /// <summary>

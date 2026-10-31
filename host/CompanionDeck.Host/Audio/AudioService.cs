@@ -22,6 +22,19 @@ public sealed class AudioService : IDisposable
     public bool Available { get; private set; }
     public bool CanSwitchDevices { get; private set; }
 
+    /// <summary>Applications whose level the user asked to keep.</summary>
+    public VolumeMemory Memory { get; } = new();
+
+    /// <summary>
+    /// Output endpoints kept open between enumerations, so each one's own level can be read and
+    /// set without paying for another enumeration, which can take seconds.
+    /// </summary>
+    private readonly object _devGate = new();
+    private Dictionary<string, MMDevice> _renderDevs = new();
+    private volatile Dictionary<string, (int volume, bool muted)> _devLevels = new();
+    private long _devLevelsAt;
+    private int _levelsBusy;
+
     /// <summary>
     /// Set when Windows reports an endpoint change. Callers check this rather than being
     /// called back, deliberately - see NotificationClient below.
@@ -45,6 +58,7 @@ public sealed class AudioService : IDisposable
         try
         {
             _enumerator.RegisterEndpointNotificationCallback(_notifications);
+            Memory.Load();
             Resolve(force: true);
             CanSwitchDevices = PolicyConfig.IsAvailable();
             Available = true;
@@ -177,9 +191,21 @@ public sealed class AudioService : IDisposable
 
         EnsureDeviceLists(render, capture);
 
-        state.Outputs = _cachedOutputs ?? new List<AudioDeviceInfo>();
+        RefreshDeviceLevels();
+        var levels = _devLevels;
+        state.Outputs = (_cachedOutputs ?? new List<AudioDeviceInfo>()).Select(o =>
+        {
+            levels.TryGetValue(o.Id, out var lv);
+            return new AudioDeviceInfo
+            {
+                Id = o.Id, Name = o.Name, IsDefault = o.IsDefault,
+                Volume = levels.ContainsKey(o.Id) ? lv.volume : null,
+                Muted = levels.ContainsKey(o.Id) ? lv.muted : null,
+            };
+        }).ToList();
         state.Inputs = _cachedInputs ?? new List<AudioDeviceInfo>();
         state.Apps = ListApps(render);
+        state.Deafened = state.MasterMuted && state.MicMuted;
 
         if (sw.ElapsedMilliseconds > 120)
             Log.Debug($"audio snapshot {sw.ElapsedMilliseconds}ms " +
@@ -238,10 +264,13 @@ public sealed class AudioService : IDisposable
     private List<AudioDeviceInfo> ListDevices(DataFlow flow, string? defaultId)
     {
         var list = new List<AudioDeviceInfo>();
+        var keep = flow == DataFlow.Render ? new Dictionary<string, MMDevice>() : null;
+        var levels = new Dictionary<string, (int, bool)>();
         try
         {
             foreach (var d in _enumerator.EnumerateAudioEndPoints(flow, DeviceState.Active))
             {
+                bool kept = false;
                 try
                 {
                     list.Add(new AudioDeviceInfo
@@ -252,11 +281,31 @@ public sealed class AudioService : IDisposable
                         // never disagree with the device the master slider controls.
                         IsDefault = d.ID == defaultId,
                     });
+
+                    if (keep is not null)
+                    {
+                        keep[d.ID] = d;
+                        kept = true;
+                        try
+                        {
+                            var v = d.AudioEndpointVolume;
+                            levels[d.ID] = ((int)Math.Round(v.MasterVolumeLevelScalar * 100), v.Mute);
+                        }
+                        catch (Exception ex) { Log.Debug($"endpoint level: {ex.Message}"); }
+                    }
                 }
-                finally { d.Dispose(); }
+                finally { if (!kept) d.Dispose(); }
             }
         }
         catch (Exception ex) { Log.Debug($"enumerate {flow}: {ex.Message}"); }
+
+        if (keep is not null)
+        {
+            Dictionary<string, MMDevice> old;
+            lock (_devGate) { old = _renderDevs; _renderDevs = keep; }
+            _devLevels = levels;
+            foreach (var d in old.Values) try { d.Dispose(); } catch { }
+        }
 
         return list.OrderByDescending(d => d.IsDefault)
                    .ThenBy(d => d.Name, StringComparer.OrdinalIgnoreCase)
@@ -324,6 +373,7 @@ public sealed class AudioService : IDisposable
                             Volume = vol,
                             Muted = muted,
                             Active = active,
+                            Remembered = Memory.Has(name.ToLowerInvariant()),
                         };
                     }
                 }
@@ -440,21 +490,180 @@ public sealed class AudioService : IDisposable
     public bool SetAppVolume(string id, int percent)
     {
         int v = Math.Clamp(percent, 0, 100);
-        return ForEachSessionOf(id, s =>
+        bool ok = ForEachSessionOf(id, s =>
         {
             s.SimpleAudioVolume.Volume = v / 100f;
             if (v > 0 && s.SimpleAudioVolume.Mute) s.SimpleAudioVolume.Mute = false;
         });
+        if (ok) KeepCurrent(id);
+        return ok;
     }
 
     public bool ToggleAppMute(string id)
     {
         bool? target = null;
-        return ForEachSessionOf(id, s =>
+        bool ok = ForEachSessionOf(id, s =>
         {
             target ??= !s.SimpleAudioVolume.Mute;
             s.SimpleAudioVolume.Mute = target.Value;
         });
+        if (ok) KeepCurrent(id);
+        return ok;
+    }
+
+    /// <summary>A pinned application follows the user's changes, so what is kept is what they last chose.</summary>
+    private void KeepCurrent(string id)
+    {
+        string key = id.ToLowerInvariant();
+        if (!Memory.Has(key)) return;
+        if (GetAppLevels(id) is { } lv) Memory.Set(key, lv.volume, lv.muted);
+    }
+
+    /// <summary>Pins an application's current level, or lets it go.</summary>
+    public bool RememberApp(string id, bool on)
+    {
+        string key = id.ToLowerInvariant();
+        if (!on) { Memory.Forget(key); return true; }
+        return GetAppLevels(id) is { } lv && Memory.Set(key, lv.volume, lv.muted);
+    }
+
+    private HashSet<string>? _restoredSeen;
+
+    /// <summary>
+    /// Puts pinned levels back on applications that have just appeared. Run on a timer, because
+    /// the point is that it happens whether or not a tablet is watching.
+    /// </summary>
+    public void RestoreRemembered()
+    {
+        if (!Available || Memory.Count == 0) return;
+        var render = Render;
+        if (render is null) return;
+
+        var now = ListApps(render).Select(a => a.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var before = _restoredSeen;
+        _restoredSeen = now;
+
+        foreach (var id in now)
+        {
+            if (before is not null && before.Contains(id)) continue;
+            if (Memory.Get(id) is not { } saved) continue;
+
+            ForEachSessionOf(id, s =>
+            {
+                s.SimpleAudioVolume.Volume = saved.Volume / 100f;
+                s.SimpleAudioVolume.Mute = saved.Muted;
+            });
+            Log.Info($"restored {id} to {saved.Volume}%{(saved.Muted ? " (muted)" : "")}");
+        }
+    }
+
+    public bool SetMasterMute(bool muted)
+    {
+        var d = Render;
+        if (d is null) return false;
+        try { d.AudioEndpointVolume.Mute = muted; return true; }
+        catch (Exception ex) { Log.Warn($"set master mute: {ex.Message}"); _stale = true; return false; }
+    }
+
+    public bool SetMicMute(bool muted)
+    {
+        var d = Capture;
+        if (d is null) return false;
+        try { d.AudioEndpointVolume.Mute = muted; return true; }
+        catch (Exception ex) { Log.Warn($"set mic mute: {ex.Message}"); _stale = true; return false; }
+    }
+
+    // What was already muted when deafen was switched on, so switching it off puts back
+    // exactly that and does not unmute something the user had muted on purpose.
+    private bool _priorMasterMuted, _priorMicMuted;
+
+    public bool IsDeafened()
+    {
+        try { return Render?.AudioEndpointVolume.Mute == true && Capture?.AudioEndpointVolume.Mute == true; }
+        catch { return false; }
+    }
+
+    public bool SetDeafened(bool on)
+    {
+        var render = Render;
+        var capture = Capture;
+        if (render is null) return false;
+
+        try
+        {
+            if (on)
+            {
+                _priorMasterMuted = render.AudioEndpointVolume.Mute;
+                _priorMicMuted = capture?.AudioEndpointVolume.Mute ?? false;
+                render.AudioEndpointVolume.Mute = true;
+                if (capture is not null) capture.AudioEndpointVolume.Mute = true;
+            }
+            else
+            {
+                render.AudioEndpointVolume.Mute = _priorMasterMuted;
+                if (capture is not null) capture.AudioEndpointVolume.Mute = _priorMicMuted;
+                _priorMasterMuted = _priorMicMuted = false;
+            }
+            return true;
+        }
+        catch (Exception ex) { Log.Warn($"deafen: {ex.Message}"); _stale = true; return false; }
+    }
+
+    public bool ToggleDeafened() => SetDeafened(!IsDeafened());
+
+    /// <summary>
+    /// Reads every output's own level on a background thread, at most once a second. These are
+    /// COM calls on devices that can be slow to answer, and the publish loop must never wait on one.
+    /// </summary>
+    private void RefreshDeviceLevels()
+    {
+        long now = Environment.TickCount64;
+        if (now - _devLevelsAt < 1000) return;
+        if (Interlocked.Exchange(ref _levelsBusy, 1) == 1) return;
+        _devLevelsAt = now;
+
+        Task.Run(() =>
+        {
+            try
+            {
+                var read = new Dictionary<string, (int volume, bool muted)>();
+                lock (_devGate)
+                {
+                    foreach (var (id, dev) in _renderDevs)
+                    {
+                        try
+                        {
+                            var v = dev.AudioEndpointVolume;
+                            read[id] = ((int)Math.Round(v.MasterVolumeLevelScalar * 100), v.Mute);
+                        }
+                        catch (Exception ex) { Log.Debug($"endpoint level: {ex.Message}"); }
+                    }
+                }
+                if (read.Count > 0) _devLevels = read;
+            }
+            finally { Interlocked.Exchange(ref _levelsBusy, 0); }
+        });
+    }
+
+    /// <summary>Sets one output's own level, whether or not it is the default.</summary>
+    public bool SetDeviceVolume(string deviceId, int percent)
+    {
+        int v = Math.Clamp(percent, 0, 100);
+        try
+        {
+            lock (_devGate)
+            {
+                if (!_renderDevs.TryGetValue(deviceId, out var dev)) return false;
+                var vol = dev.AudioEndpointVolume;
+                vol.MasterVolumeLevelScalar = v / 100f;
+                if (v > 0 && vol.Mute) vol.Mute = false;
+            }
+
+            var copy = new Dictionary<string, (int volume, bool muted)>(_devLevels) { [deviceId] = (v, v == 0 && _devLevels.TryGetValue(deviceId, out var l) && l.muted) };
+            _devLevels = copy;
+            return true;
+        }
+        catch (Exception ex) { Log.Warn($"set device volume: {ex.Message}"); return false; }
     }
 
     /// <summary>Current level for one process, used to show a media session's own volume.</summary>
@@ -523,9 +732,27 @@ public sealed class AudioService : IDisposable
 
         // Do not wait for the notification callback; the caller publishes immediately after.
         _stale = true;
-        InvalidateDeviceCache();
+        // The lists are corrected in place rather than thrown away. Dropping them left the next several
+        // snapshots with no devices at all while Windows re-enumerated - seconds, on a PC with a
+        // Bluetooth endpoint - so the tablet kept showing the old tick long after the switch had worked.
+        // The full re-read still happens, behind this, because the ids it is keyed on have changed.
+        MarkDefaultInCache(deviceId);
         Resolve();
         return true;
+    }
+
+    private void MarkDefaultInCache(string deviceId)
+    {
+        List<AudioDeviceInfo> Flip(List<AudioDeviceInfo> list) => list.Select(d => new AudioDeviceInfo
+        {
+            Id = d.Id, Name = d.Name, IsDefault = d.Id == deviceId, Volume = d.Volume, Muted = d.Muted,
+        }).ToList();
+
+        var outs = _cachedOutputs;
+        var ins = _cachedInputs;
+        if (outs is not null && outs.Any(d => d.Id == deviceId)) _cachedOutputs = Flip(outs);
+        else if (ins is not null && ins.Any(d => d.Id == deviceId)) _cachedInputs = Flip(ins);
+        else InvalidateDeviceCache();   // not a device we had listed: fall back to a full re-read
     }
 
     public void Dispose()
@@ -536,6 +763,11 @@ public sealed class AudioService : IDisposable
             try { _render?.Dispose(); } catch { }
             try { _capture?.Dispose(); } catch { }
             _render = _capture = null;
+        }
+        lock (_devGate)
+        {
+            foreach (var d in _renderDevs.Values) try { d.Dispose(); } catch { }
+            _renderDevs = new();
         }
         try { _enumerator.Dispose(); } catch { }
     }

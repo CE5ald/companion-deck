@@ -1,281 +1,384 @@
 using System.Diagnostics;
-using System.Globalization;
+using System.Security.Principal;
+using CompanionDeck.Host.Server;
+using Microsoft.Diagnostics.Tracing;
+using Microsoft.Diagnostics.Tracing.Session;
 
 namespace CompanionDeck.Host.Telemetry;
 
 /// <summary>
-/// Frame rate for the running game, read from PresentMon's CSV output. PresentMon is not bundled
-/// - it is an external tool this looks for, and FPS is simply unavailable when none is installed.
+/// Frame rate for a running game, read from Windows' own event tracing (ETW). The DirectX runtime
+/// announces every Present call it receives, per process and per swap chain, so counting those gives
+/// the frame rate of any DirectX 9/10/11/12 game on any GPU from any vendor, with nothing to install.
+///
+/// This replaces a design that launched PresentMon as a child process. That never produced a reading:
+/// it picked whichever PresentMon-like executable it found first, and the one it found was NVIDIA
+/// FrameView's private build, which exits at once with code 1 when driven the way a public PresentMon
+/// is. Anything that depends on a third-party executable being present, being the right one, and
+/// accepting these arguments, fails in exactly that way on somebody's machine.
+///
+/// OpenGL and Vulkan games do not go through DirectX's present path, so for them the same count is
+/// taken from the graphics kernel's own present event, which every API ends in. DirectX swap chains are
+/// preferred when there are any, because they separate a game's real swap chain from its overlays.
+///
+/// What this measures is the interval between the game's own Present calls, which is what the
+/// "frame time" of nearly every overlay is. It is not the time a frame reached the screen, so frames
+/// that a driver generates itself (frame generation) are not counted, and a frame the game presented
+/// but the display dropped is.
+///
+/// Windows only lets an administrator, or a member of "Performance Log Users", open a real-time
+/// trace. When neither is true <see cref="Available"/> is false and <see cref="Detail"/> says so,
+/// rather than a number being invented.
 /// </summary>
 public sealed class FpsProvider : IDisposable
 {
-    /// <summary>
-    /// Where to look, best first. Intel's build is preferred because it is the upstream
-    /// project and is maintained; the NVIDIA FrameView copy is a fallback that happens to
-    /// be present on many machines with an NVIDIA driver.
-    /// </summary>
-    private static IEnumerable<string> Candidates()
-    {
-        // Dropped next to the agent, which is the no-install route: unzip PresentMon here.
-        var beside = AppContext.BaseDirectory;
-        yield return Path.Combine(beside, "PresentMon.exe");
-        yield return Path.Combine(beside, "PresentMon-x64.exe");
+    private static readonly Guid Dxgi = new("CA11C036-0102-4A2D-A6AD-F03CFED5D3C9");   // Microsoft-Windows-DXGI
+    private static readonly Guid D3D9 = new("783ACA0A-790E-4D7F-8451-AA850511C6B9");   // Microsoft-Windows-D3D9
+    private static readonly Guid DxgKrnl = new("802EC45A-1E99-4B83-9920-87C98277BA9D"); // Microsoft-Windows-DxgKrnl
 
-        var env = Environment.GetEnvironmentVariable("COMPANIONDECK_PRESENTMON");
-        if (!string.IsNullOrWhiteSpace(env)) yield return env;
+    private const int DxgiPresentStart = 42;
+    private const int D3D9PresentStart = 1;
+    private const int KrnlPresentInfo = 184;
+    // The present events are the ones carrying bit 27 of the kernel provider's keywords. Asking for
+    // every keyword delivered about 45,000 events a second on a machine doing nothing in particular.
+    private const ulong KrnlPresentKeyword = 0x8000000;
+    private const long KrnlKey = long.MinValue + 1;
 
-        foreach (var dir in new[]
-                 {
-                     Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-                     Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
-                     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                 })
-        {
-            if (string.IsNullOrEmpty(dir)) continue;
-            yield return Path.Combine(dir, "PresentMon", "PresentMon.exe");
-            yield return Path.Combine(dir, "Intel", "PresentMon", "PresentMon.exe");
-        }
+    private const string SessionName = "CompanionDeckFps";
+    private const int RecentFrames = 360;       // the live frame-time graph
+    private const int WindowFrames = 600;       // the 1% low
+    private const double LiveWindowMs = 1000;   // the number on the dial is the last second
+    private const double StaleAfterMs = 2000;
 
-        var pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
-        if (!string.IsNullOrEmpty(pf))
-            yield return Path.Combine(pf, "NVIDIA Corporation", "FrameViewSDK", "bin", "PresentMon_x64.exe");
-
-        // Anything on PATH, which covers a user who installed it their own way.
-        foreach (var dir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator))
-        {
-            if (string.IsNullOrWhiteSpace(dir)) continue;
-            string candidate;
-            try { candidate = Path.Combine(dir.Trim(), "PresentMon.exe"); } catch { continue; }
-            yield return candidate;
-        }
-    }
+    /// <summary>Raised for every frame, on the trace thread; handlers must be quick.</summary>
+    public event Action<double>? Frame;
 
     private readonly object _gate = new();
-    private readonly Queue<double> _frameTimes = new();   // ms between presents
-    private const int WindowFrames = 600;                 // a few seconds at typical rates
 
-    private Process? _proc;
-    private int _trackedPid;
+    // ---- state shared between the trace thread and the readers, under _gate
+    private readonly Queue<double> _frameTimes = new();   // ms between presents, for the 1% low
+    private readonly Queue<double> _recent = new();       // the latest few hundred, for the graph
+    private readonly Queue<double> _stamps = new();       // present timestamps in the last second
     private DateTime _lastFrameUtc = DateTime.MinValue;
+    private long _framesSinceTrack;
 
-    // A target with no swapchain - a background service, or our own process - makes
-    // PresentMon exit at once. Without a cooldown the publish loop simply respawns it on
-    // the next tick, which measured 80 process launches in under a minute.
-    private int _lastAttemptPid;
-    private DateTime _attemptStartedUtc;
-    private DateTime _cooldownUntil = DateTime.MinValue;
-    private int _consecutiveFailures;
+    // ---- trace-thread-only state
+    private sealed class Chain
+    {
+        public double LastMs = double.NaN;
+        public double LastSeenMs;
+        public readonly Queue<double> Recent = new();   // timestamps in the last second
+    }
+    private readonly Dictionary<long, Chain> _chains = new();
+    private long _mainKey = long.MinValue;
+    private double _nextPickMs;
 
-    /// <summary>
-    /// Set once this provider has been given up on for the life of the process. Every start
-    /// attempt spawns a process which asks the kernel to create - and, with
-    /// --stop_existing_session, to tear down - a real-time ETW trace session.
-    /// </summary>
+    private TraceEventSession? _session;
+    private Thread? _thread;
+    private volatile int _pid;
+    private DateTime _trackStartedUtc;
+    private DateTime _idleSince = DateTime.MinValue;
+    private int _failures;
+    private DateTime _retryAt = DateTime.MinValue;
     private volatile bool _abandoned;
-    private bool _everRead;
 
-    /// <summary>Total attempts, so the give-up decision is about this run, not this target.</summary>
-    private int _totalAttempts;
-    private const int AbandonAfter = 6;
-
-    public string? ExePath { get; }
-    public bool Available => ExePath is not null && !_abandoned;
+    private readonly bool _permitted;
+    private string _problem = "";
 
     public FpsProvider()
     {
-        ExePath = Candidates().FirstOrDefault(p =>
+        _permitted = Elevation.IsElevated || InPerformanceLogUsers();
+        if (!_permitted)
         {
-            try { return File.Exists(p); } catch { return false; }
-        });
-        Log.Info(ExePath is null
-            ? "PresentMon not found - FPS unavailable. Put PresentMon.exe beside the agent, " +
-              "or set COMPANIONDECK_PRESENTMON, to enable it."
-            : $"PresentMon: {ExePath}");
+            _problem = "needs the elevated agent (or your account in Performance Log Users)";
+            Log.Info($"FPS unavailable: {_problem}");
+        }
+        else Log.Info("FPS: Windows event tracing (DirectX present events)");
     }
 
-    /// <summary>Currently tracked process, or 0 when idle.</summary>
-    public int TrackedPid => _trackedPid;
+    /// <summary>True when this process may open a trace session, and it has not been given up on.</summary>
+    public bool Available => _permitted && !_abandoned;
+
+    /// <summary>The process being measured, or 0 when idle.</summary>
+    public int TrackedPid => _pid;
+
+    /// <summary>"off" (nothing asked), "waiting" (asked, no frames yet), "live", or "unavailable".</summary>
+    public string State
+    {
+        get
+        {
+            if (!Available) return "unavailable";
+            if (_pid == 0) return "off";
+            lock (_gate)
+                return (DateTime.UtcNow - _lastFrameUtc).TotalMilliseconds <= StaleAfterMs ? "live" : "waiting";
+        }
+    }
+
+    /// <summary>Why FPS is unavailable, or what a "waiting" state most likely means. Empty when fine.</summary>
+    public string Detail
+    {
+        get
+        {
+            if (!Available) return _problem;
+            if (State == "waiting" && _pid != 0 &&
+                (DateTime.UtcNow - _trackStartedUtc).TotalSeconds > 5 && Volatile.Read(ref _framesSinceTrack) == 0)
+                return "no frames seen from this program; it may not draw through DirectX";
+            return "";
+        }
+    }
+
+    private static bool InPerformanceLogUsers()
+    {
+        try
+        {
+            using var id = WindowsIdentity.GetCurrent();
+            return new WindowsPrincipal(id).IsInRole(new SecurityIdentifier("S-1-5-32-559"));
+        }
+        catch { return false; }
+    }
+
+    // ------------------------------------------------------------------ control
 
     /// <summary>
-    /// Ensures we are tracking the given process, starting, retargeting or stopping as
-    /// needed. Passing null or 0 stops tracking.
+    /// Ensures the given process is the one being measured, starting the trace when needed. Passing
+    /// null or 0 begins a short grace period after which the trace is stopped, so an alt-tab out of a
+    /// game and back does not tear a kernel session down and up again.
     /// </summary>
     public void Track(int? pid)
     {
         if (!Available) return;
-        if (_abandoned) return;
 
         int want = pid.GetValueOrDefault();
-
-        // Tracking ourselves is never meaningful and always fails.
-        if (want == Environment.ProcessId) want = 0;
+        if (want == Environment.ProcessId) want = 0;   // never meaningful
 
         lock (_gate)
         {
-            if (want == _trackedPid && _proc is { HasExited: false }) return;
-
-            // Did the previous attempt at this target die more or less immediately?
-            if (want != 0 && want == _lastAttemptPid && _proc is { HasExited: true })
+            if (want == 0)
             {
-                if ((DateTime.UtcNow - _attemptStartedUtc).TotalSeconds < 3)
-                {
-                    _consecutiveFailures++;
-                    int backoff = Math.Min(60, 1 << Math.Min(6, _consecutiveFailures));
-                    _cooldownUntil = DateTime.UtcNow.AddSeconds(backoff);
-                    // Warn, not Debug. This was Debug, and the agent runs at Info, so a
-                    // provider that has never once produced a reading failed in complete
-                    // silence for the life of the project - the log showed only a cheerful
-                    // "FPS tracking started" every time the backoff expired. A capability
-                    // that is advertised to the tablet and then never works has to say so.
-                    int code = -1;
-                    try { code = _proc.ExitCode; } catch { }
-                    if (_consecutiveFailures == 1 || _consecutiveFailures % 5 == 0)
-                        Log.Warn($"PresentMon exited immediately (code {code}) for pid {want} " +
-                                 $"(attempt {_consecutiveFailures}); backing off {backoff}s");
-
-                    // Give up for good once it is clear this will never work here. Each retry
-                    // costs a process spawn and a kernel ETW session, and that price is only
-                    // worth paying while there is some prospect of a reading.
-                    if (!_everRead && ++_totalAttempts >= AbandonAfter)
-                    {
-                        _abandoned = true;
-                        Log.Warn($"PresentMon has failed {_totalAttempts} times without ever producing a " +
-                                 "reading; disabling FPS for this session. Each attempt starts an ETW " +
-                                 "trace session, which is far too expensive to keep retrying.");
-                        StopLocked();
-                        return;
-                    }
-                }
+                if (_pid != 0) { _pid = 0; ClearReadings(); _idleSince = DateTime.UtcNow; }
+                if (_session is not null && _idleSince != DateTime.MinValue &&
+                    (DateTime.UtcNow - _idleSince).TotalSeconds > 6)
+                    StopSessionLocked();
+                return;
             }
 
-            StopLocked();
-            if (want <= 0) { _consecutiveFailures = 0; _cooldownUntil = DateTime.MinValue; return; }
-
-            if (want == _lastAttemptPid && DateTime.UtcNow < _cooldownUntil) return;
-            if (want != _lastAttemptPid) { _consecutiveFailures = 0; _cooldownUntil = DateTime.MinValue; }
-
-            try
+            _idleSince = DateTime.MinValue;
+            if (want != _pid)
             {
-                var psi = new ProcessStartInfo(ExePath!)
-                {
-                    // v1 metrics keep the CSV schema stable and simple.
-                    Arguments = $"--process_id {want} --output_stdout --no_console_stats " +
-                                "--v1_metrics --stop_existing_session --terminate_on_proc_exit " +
-                                "--session_name CompanionDeck",
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                };
-
-                _proc = Process.Start(psi);
-                if (_proc is null) { Log.Warn("could not start PresentMon"); return; }
-
-                _trackedPid = want;
-                _lastAttemptPid = want;
-                _attemptStartedUtc = DateTime.UtcNow;
-                _frameTimes.Clear();
-                _lastFrameUtc = DateTime.MinValue;
-
-                _ = Task.Run(() => ReadLoop(_proc));
-                _ = Task.Run(async () =>
-                {
-                    var err = await _proc.StandardError.ReadToEndAsync().ConfigureAwait(false);
-                    if (!string.IsNullOrWhiteSpace(err)) Log.Warn($"PresentMon: {err.Trim()}");
-                });
-
+                _pid = want;
+                ClearReadings();
+                _trackStartedUtc = DateTime.UtcNow;
                 Log.Info($"FPS tracking started for pid {want}");
             }
-            catch (Exception ex)
-            {
-                Log.Warn($"PresentMon start failed: {ex.Message}");
-                _proc = null;
-                _trackedPid = 0;
-            }
+
+            if (_session is null && DateTime.UtcNow >= _retryAt) StartSessionLocked();
         }
     }
 
     public void Stop()
     {
-        lock (_gate) StopLocked();
+        lock (_gate)
+        {
+            _pid = 0;
+            ClearReadings();
+            StopSessionLocked();
+        }
     }
 
-    private void StopLocked()
+    private void ClearReadings()
     {
-        var p = _proc;
-        _proc = null;
-        _trackedPid = 0;
-        _frameTimes.Clear();
-
-        if (p is null) return;
-        try { if (!p.HasExited) p.Kill(entireProcessTree: true); } catch { }
-        try { p.Dispose(); } catch { }
-        Log.Debug("FPS tracking stopped");
+        _frameTimes.Clear(); _recent.Clear(); _stamps.Clear();
+        _lastFrameUtc = DateTime.MinValue;
+        Volatile.Write(ref _framesSinceTrack, 0);
+        _chainsReset = true;
     }
 
-    private void ReadLoop(Process p)
+    private volatile bool _chainsReset;
+
+    private void StartSessionLocked()
     {
         try
         {
-            int col = -1;
-            string? line;
-            while ((line = p.StandardOutput.ReadLine()) is not null)
+            // Creating a session under a name that already exists stops the old one, which is what is
+            // wanted when a previous run of this agent died without cleaning up.
+            var session = new TraceEventSession(SessionName) { StopOnDispose = true };
+            // Filtered by event id inside the kernel, so the agent is handed the present events and
+            // nothing else rather than being asked to look at all of them.
+            static TraceEventProviderOptions Only(int id) => new() { EventIDsToEnable = new List<int> { id } };
+            session.EnableProvider(Dxgi, TraceEventLevel.Informational, ulong.MaxValue, Only(DxgiPresentStart));
+            session.EnableProvider(D3D9, TraceEventLevel.Informational, ulong.MaxValue, Only(D3D9PresentStart));
+            session.EnableProvider(DxgKrnl, TraceEventLevel.Informational, KrnlPresentKeyword, Only(KrnlPresentInfo));
+            session.Source.AllEvents += OnEvent;
+            _session = session;
+            _chains.Clear();
+            _mainKey = long.MinValue;
+
+            _thread = new Thread(() =>
             {
-                if (col < 0)
+                try { session.Source.Process(); }
+                catch (Exception ex) { Log.Warn($"FPS trace ended with an error: {ex}"); }
+                finally
                 {
-                    // Locate the frame-interval column from the header rather than
-                    // assuming a position; the schema differs between builds.
-                    var headers = line.Split(',');
-                    for (int i = 0; i < headers.Length; i++)
+                    // However it ended, a session nobody is reading from must not keep Track() from
+                    // starting a new one.
+                    lock (_gate)
                     {
-                        if (headers[i].Trim().Equals("msBetweenPresents", StringComparison.OrdinalIgnoreCase))
-                        { col = i; break; }
+                        if (ReferenceEquals(_session, session))
+                        {
+                            _session = null;
+                            _retryAt = DateTime.UtcNow.AddSeconds(2);
+                            try { session.Dispose(); } catch { }
+                        }
                     }
-                    if (col < 0) Log.Debug($"PresentMon header without msBetweenPresents: {line}");
-                    continue;
                 }
-
-                var parts = line.Split(',');
-                if (parts.Length <= col) continue;
-                if (!double.TryParse(parts[col], NumberStyles.Float, CultureInfo.InvariantCulture, out var ms)) continue;
-                if (ms <= 0 || ms > 1000) continue;   // ignore nonsense and long stalls
-
-                lock (_gate)
-                {
-                    _everRead = true;
-                    _frameTimes.Enqueue(ms);
-                    while (_frameTimes.Count > WindowFrames) _frameTimes.Dequeue();
-                    _lastFrameUtc = DateTime.UtcNow;
-                }
+            }) { IsBackground = true, Name = "fps-etw" };
+            _thread.Start();
+            _failures = 0;
+            Log.Info("FPS trace session started");
+        }
+        catch (Exception ex)
+        {
+            _session = null;
+            _failures++;
+            _retryAt = DateTime.UtcNow.AddSeconds(Math.Min(60, 5 * _failures));
+            _problem = ex is UnauthorizedAccessException
+                ? "needs the elevated agent (or your account in Performance Log Users)"
+                : $"the Windows trace could not start: {ex.Message}";
+            Log.Warn($"FPS trace session failed (attempt {_failures}): {ex.Message}");
+            if (_failures >= 5)
+            {
+                _abandoned = true;
+                Log.Warn("FPS disabled for this run after repeated trace failures");
             }
         }
-        catch (Exception ex) { Log.Debug($"PresentMon read loop: {ex.Message}"); }
+    }
+
+    private void StopSessionLocked()
+    {
+        var s = _session;
+        _session = null;
+        if (s is null) return;
+        try { s.Dispose(); } catch { }
+        Log.Info("FPS trace session stopped");
+    }
+
+    // ------------------------------------------------------------------ the trace thread
+
+    private void OnEvent(TraceEvent e)
+    {
+        int pid = _pid;
+        if (pid == 0 || e.ProcessID != pid) return;
+
+        long key;
+        var g = e.ProviderGuid;
+        int id = (int)e.ID;
+        if (g == Dxgi && id == DxgiPresentStart) key = SwapChain(e);
+        else if (g == Dxgi && id == DxgiPresentStart) key = SwapChain(e);
+        else if (g == DxgKrnl && id == KrnlPresentInfo) key = KrnlKey;
+        else return;
+
+        double ts = e.TimeStampRelativeMSec;
+
+        if (_chainsReset) { _chains.Clear(); _mainKey = long.MinValue; _chainsReset = false; }
+
+        if (!_chains.TryGetValue(key, out var chain)) _chains[key] = chain = new Chain();
+        double interval = double.IsNaN(chain.LastMs) ? double.NaN : ts - chain.LastMs;
+        chain.LastMs = ts;
+        chain.LastSeenMs = ts;
+        chain.Recent.Enqueue(ts);
+        while (chain.Recent.Count > 0 && ts - chain.Recent.Peek() > LiveWindowMs) chain.Recent.Dequeue();
+
+        // A process may own several swap chains (an overlay, a launcher, a second window). The game's
+        // is the one presenting the most, so choose by recent count, re-evaluated twice a second.
+        if (ts >= _nextPickMs)
+        {
+            _nextPickMs = ts + 500;
+            long best = _mainKey; double bestN = -1;
+            foreach (var (k, c) in _chains)
+            {
+                if (ts - c.LastSeenMs > StaleAfterMs) continue;
+                // The kernel's count is a fallback: any live DirectX swap chain outranks it.
+                double score = k == KrnlKey ? -0.5 : c.Recent.Count;
+                if (score > bestN) { best = k; bestN = score; }
+            }
+            _mainKey = best;
+        }
+        if (_mainKey == long.MinValue) _mainKey = key;
+        if (key != _mainKey) return;
+
+        Volatile.Write(ref _framesSinceTrack, 1);
+        if (double.IsNaN(interval) || interval <= 0 || interval > 1000) return;   // first frame, or a stall
+
+        lock (_gate)
+        {
+            if (_pid != pid) return;
+            _frameTimes.Enqueue(interval);
+            while (_frameTimes.Count > WindowFrames) _frameTimes.Dequeue();
+            _recent.Enqueue(interval);
+            while (_recent.Count > RecentFrames) _recent.Dequeue();
+            _stamps.Enqueue(ts);
+            while (_stamps.Count > 0 && ts - _stamps.Peek() > LiveWindowMs) _stamps.Dequeue();
+            _lastFrameUtc = DateTime.UtcNow;
+        }
+        try { Frame?.Invoke(interval); } catch { /* a listener must not stop the trace */ }
+    }
+
+    /// <summary>
+    /// The swap chain's address, which is the first field of both present events. Two swap chains in one
+    /// process then count separately instead of interleaving into one impossible frame rate.
+    /// </summary>
+    private static long SwapChain(TraceEvent e)
+    {
+        try
+        {
+            var p = e.EventData();
+            return p.Length >= 8 ? BitConverter.ToInt64(p, 0) : 0;
+        }
+        catch { return 0; }
+    }
+
+    // ------------------------------------------------------------------ readings
+
+    /// <summary>The most recent frame times in milliseconds, oldest first; empty when nothing is being drawn.</summary>
+    public double[] RecentFrameTimes(int count)
+    {
+        lock (_gate)
+        {
+            if ((DateTime.UtcNow - _lastFrameUtc).TotalMilliseconds > StaleAfterMs) return Array.Empty<double>();
+            var all = _recent.ToArray();
+            return all.Length <= count ? all : all[^count..];
+        }
     }
 
     public sealed record Reading(double Fps, double OnePercentLow);
 
-    /// <summary>Average FPS and 1% low over the rolling window, or null when idle.</summary>
+    /// <summary>Frames per second over the last second, and the 1% low over the last few hundred frames; null when nothing is being drawn.</summary>
     public Reading? Sample()
     {
         lock (_gate)
         {
-            if (_frameTimes.Count < 20) return null;
+            if (_pid == 0 || _frameTimes.Count < 5) return null;
+            if ((DateTime.UtcNow - _lastFrameUtc).TotalMilliseconds > StaleAfterMs) return null;
 
-            // Nothing presented recently: the game is minimised, loading, or gone.
-            if ((DateTime.UtcNow - _lastFrameUtc).TotalSeconds > 2) return null;
+            double fps;
+            if (_stamps.Count >= 3)
+            {
+                double span = _stamps.Last() - _stamps.Peek();
+                fps = span > 0 ? (_stamps.Count - 1) * 1000.0 / span : 0;
+            }
+            else
+            {
+                double mean = _frameTimes.TakeLast(Math.Min(_frameTimes.Count, 30)).Average();
+                fps = mean > 0 ? 1000.0 / mean : 0;
+            }
+            if (fps <= 0) return null;
 
             var times = _frameTimes.ToArray();
-            double mean = times.Average();
-            if (mean <= 0) return null;
-
-            // 1% low is conventionally the mean of the worst 1% of frames.
             Array.Sort(times);
             int worstCount = Math.Max(1, times.Length / 100);
             double worstMean = times[^worstCount..].Average();
 
-            return new Reading(
-                Math.Round(1000.0 / mean, 1),
-                Math.Round(1000.0 / worstMean, 1));
+            return new Reading(Math.Round(fps, 1), Math.Round(1000.0 / worstMean, 1));
         }
     }
 

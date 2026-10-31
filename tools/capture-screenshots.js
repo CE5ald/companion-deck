@@ -22,6 +22,23 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const SCROLL = "document.querySelector('#content').scrollTo(0, 99999); 1";
 const SCROLLED = "document.querySelector('#content').scrollTop > 50";
 const GUIDE_SHOWN = "!document.querySelector('#setup').hidden && getComputedStyle(document.querySelector('#veil')).opacity === '1'";
+const TO_VOICE = "document.querySelector('section[data-page=\"media\"] .voice-strip').closest('.card').scrollIntoView(); 1";
+// Re-run on every retry, so it walks from the page to edit mode to the open editor and then stops.
+const OPEN_EDITOR = "(() => { if (!document.querySelector('#sheet').hidden) return 1; if (!document.querySelector('.deck-grid.editing')) document.querySelector('.d-edit').click(); else { const t = document.querySelector('[data-tile=\"focus\"]'); if (t) t.click(); } return 1; })()";
+const EDITOR_OPEN = "!document.querySelector('#sheet').hidden";
+const EDIT_MODE = "(() => { if (!document.querySelector('.deck-grid.editing')) document.querySelector('.d-edit').click(); return 1; })()";
+const EDITING = "!!document.querySelector('.deck-grid.editing')";
+const AMBIENT = "(() => { document.querySelector('.amb').click(); return 1; })()";
+const IS_AMBIENT = "document.querySelector('#app').classList.contains('ambient')";
+// Walks from the Deck page to a new tile with a macro step that is part-way through recording.
+const RECORD_MACRO = "(() => { if (document.querySelector('.rec-live')) return 1; const open = !document.querySelector('#sheet').hidden; if (!document.querySelector('.deck-grid.editing')) { document.querySelector('.d-edit').click(); return 1; } if (!open) { document.querySelector('.deck-grid .tile.add').click(); return 1; } if (!document.querySelector('[data-step] [data-macro]')) { const d = document.querySelector('[data-step=\\\"0\\\"] [data-act=\\\"del\\\"]'); if (d) d.click(); document.querySelector('[data-add=\\\"macro\\\"]').click(); return 1; } document.querySelector('[data-macro=\\\"record\\\"]').click(); return 1; })()";
+const TO = (sel) => `document.querySelector('${sel}').scrollIntoView(); 1`;
+const OPEN_SESSION = "(() => { document.querySelector('.sessions-card').scrollIntoView(); if (!document.querySelector('.sess.open')) document.querySelector('.sess').click(); return 1; })()";
+const SESSION_OPEN = "!!document.querySelector('.sess.open')";
+const AMBIENT_NP = "(() => { document.querySelector('.b-amb').click(); return 1; })()";
+const NP_SHOWN = "!document.querySelector('#npAmbient').hidden";
+const PAD_SHEET = "(() => { if (!document.querySelector('.pad-grid.editing')) { document.querySelector('.b-sbedit').click(); return 1; } if (document.querySelector('#sheet').hidden) document.querySelector('.pad').click(); return 1; })()";
+const RECORDING = "!!document.querySelector('.rec-live') && document.querySelector('.rec-live').textContent.includes('Recording')";
 
 // name, size, and how to reach the view.
 //   js     runs after the page has laid out (and again on every retry until `ready` holds)
@@ -39,6 +56,21 @@ const SHOTS = [
   { name: 'apps',            nav: 'apps' },
   { name: 'launcher',        nav: 'apps', js: SCROLL, ready: SCROLLED },
   { name: 'actions',         nav: 'quick' },
+  { name: 'deck',            nav: 'deck', query: '?ctx=gaming' },
+  { name: 'deck-edit',       nav: 'deck', js: EDIT_MODE, ready: EDITING },
+  { name: 'deck-editor',     nav: 'deck', js: OPEN_EDITOR, ready: EDITOR_OPEN },
+  { name: 'clock',           nav: 'clock' },
+  { name: 'ambient',         nav: 'clock', js: AMBIENT, ready: IS_AMBIENT },
+  { name: 'outputs',         nav: 'media', js: TO_VOICE, ready: SCROLLED },
+  { name: 'notifications',   nav: 'clock', js: SCROLL, ready: SCROLLED },
+  { name: 'history',         nav: 'perf', js: TO('.hist-card'), ready: SCROLLED },
+  { name: 'top-processes',   nav: 'perf', js: TO('.top-card'), ready: SCROLLED },
+  { name: 'sessions',        nav: 'game', js: OPEN_SESSION, ready: SESSION_OPEN },
+  { name: 'frame-times',     nav: 'game', js: TO('.frames-card'), ready: SCROLLED },
+  { name: 'media-display',   nav: 'media', js: TO('.viz-card'), ready: SCROLLED, wait: 2200 },
+  { name: 'now-playing',     nav: 'media', js: AMBIENT_NP, ready: NP_SHOWN, wait: 2400 },
+  { name: 'pad-settings',    nav: 'voice', js: PAD_SHEET, ready: "!document.querySelector('#sheet').hidden" },
+  { name: 'macro-record',    nav: 'deck', js: RECORD_MACRO, ready: RECORDING, wait: 2200 },
   { name: 'setup',           query: '?setup=half', ready: GUIDE_SHOWN },
   { name: 'phone-landscape', nav: 'home', width: 800, height: 360, wait: 3000 },
 ];

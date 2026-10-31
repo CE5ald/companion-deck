@@ -45,6 +45,29 @@ public sealed class ContextService
     public string Mode => _mode;
     public int ForegroundPid { get; private set; }
 
+    /// <summary>
+    /// The process of the game while the settled mode is "gaming", kept when the foreground flickers to
+    /// something else (a Windows Search pop-up, a notification, a launcher). Measuring whatever is in
+    /// front at this instant made the frame-rate trace follow Search for a few seconds and the graph go
+    /// blank in the middle of a match.
+    /// </summary>
+    public int GamePid { get; private set; }
+
+    /// <summary>Says whether a running program belongs to an installed game, by install folder. Set by the host.</summary>
+    public Func<int, string, bool>? GameMatcher { get; set; }
+
+    private int _matchedPid; private bool _matched; private DateTime _matchedAt;
+
+    private bool MatchesInstalledGame(int pid, string proc)
+    {
+        if (GameMatcher is null || pid <= 0) return false;
+        // The same window stays in front for minutes, so the path lookup is done once every few seconds.
+        if (pid == _matchedPid && (DateTime.UtcNow - _matchedAt).TotalSeconds < 5) return _matched;
+        _matchedPid = pid; _matchedAt = DateTime.UtcNow;
+        try { _matched = GameMatcher(pid, proc); } catch { _matched = false; }
+        return _matched;
+    }
+
     public void SetKnownGames(IEnumerable<string> exeNames) =>
         _knownGames = new HashSet<string>(exeNames, StringComparer.OrdinalIgnoreCase);
 
@@ -75,8 +98,10 @@ public sealed class ContextService
         }
 
         string observed = Classify(proc, fullscreen, gpuPercent, mediaPlaying, mediaApp);
+        if (observed == "gaming" && ForegroundPid > 0) GamePid = ForegroundPid;
 
         // Require two consecutive agreeing samples before switching modes.
+        if (_mode != "gaming" && observed != "gaming") GamePid = 0;
         if (observed == _mode) { _pendingCount = 0; }
         else if (observed == _pending)
         {
@@ -95,7 +120,7 @@ public sealed class ContextService
 
     private string Classify(string proc, bool fullscreen, double? gpu, bool mediaPlaying, string? mediaApp)
     {
-        if (proc.Length > 0 && _knownGames.Contains(proc)) return "gaming";
+        if (proc.Length > 0 && (_knownGames.Contains(proc) || MatchesInstalledGame(ForegroundPid, proc))) return "gaming";
 
         // A fullscreen window driving the GPU hard is a game even if we don't know its name.
         if (fullscreen && !Shell.Contains(proc) && gpu is > 45) return "gaming";

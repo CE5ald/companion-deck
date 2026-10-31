@@ -36,6 +36,34 @@ in any of them). `node tools/capture-screenshots.js` regenerates them.
 <td><img src="docs/images/actions.png" alt="Quick actions and display brightness"><br><b>Actions</b><br>Brightness and system shortcuts; destructive tiles must be held.</td>
 </tr>
 <tr>
+<td><img src="docs/images/deck.png" alt="Deck page: a grid of tiles that switched to a gaming profile by itself"><br><b>Deck</b><br>Tiles you lay out, one set per app. It switches profile when a game or editor is in front.</td>
+<td><img src="docs/images/deck-editor.png" alt="Tile editor: a chain of steps with a wait and a timer"><br><b>Tile editor</b><br>One tile can run a chain: shortcuts, apps, audio, media, timers and waits.</td>
+</tr>
+<tr>
+<td><img src="docs/images/clock.png" alt="Clock page with a large clock, upcoming events and running timers"><br><b>Clock</b><br>The PC's time, your calendar, and timers that survive a tablet reboot.</td>
+<td><img src="docs/images/outputs.png" alt="Voice tiles with LEDs, and an output row with a volume for each device"><br><b>Voice and outputs</b><br>Big mic and deafen tiles, and every output with its own volume.</td>
+</tr>
+<tr>
+<td><img src="docs/images/macro-record.png" alt="Tile editor recording a macro, with a live event count"><br><b>Macros</b><br>Record keys and mouse on the PC from the tablet, then bind the result to a tile.</td>
+<td><img src="docs/images/notifications.png" alt="Upcoming events and mirrored Windows notifications"><br><b>Notifications</b><br>Windows toasts on the tablet. Read-only, and off until you switch it on.</td>
+</tr>
+<tr>
+<td><img src="docs/images/history.png" alt="Load, temperature and frame-rate history charts"><br><b>History</b><br>The last 1, 5 or 30 minutes, with spikes kept.</td>
+<td><img src="docs/images/top-processes.png" alt="Top processes by memory with close and priority controls"><br><b>Top processes</b><br>What is using the PC, with lower priority, close, and a held end button.</td>
+</tr>
+<tr>
+<td><img src="docs/images/sessions.png" alt="Gaming sessions with average and 1% and 0.1% low frame rates"><br><b>Sessions</b><br>Average, 1% low and 0.1% low for each game you play.</td>
+<td><img src="docs/images/frame-times.png" alt="Live frame-time trace"><br><b>Frame times</b><br>Individual frames, so stutter shows where an average hides it.</td>
+</tr>
+<tr>
+<td><img src="docs/images/media-display.png" alt="Media page with the cover-coloured card and a live visualizer"><br><b>Visualizer</b><br>The card takes its colour from the cover; the bars follow what is playing.</td>
+<td><img src="docs/images/now-playing.png" alt="Ambient now-playing view"><br><b>Ambient</b><br>Just the track, large, for a tablet propped beside the screen.</td>
+</tr>
+<tr>
+<td><img src="docs/images/pad-settings.png" alt="Soundboard pad settings with colour, folder, volume, routing and loop"><br><b>Soundboard pads</b><br>Folders, colours, per-pad volume and looping.</td>
+<td></td>
+</tr>
+<tr>
 <td><img src="docs/images/setup.png" alt="First-run setup guide with steps that tick themselves"><br><b>First-run guide</b><br>Steps tick themselves as the tablet's own settings change.</td>
 <td><img src="docs/images/phone-landscape.png" alt="The same interface on a landscape phone"><br><b>Any screen</b><br>The same UI, reflowed for a landscape phone.</td>
 </tr>
@@ -100,17 +128,33 @@ available, so a control is only ever drawn when it can actually do something. Ru
 | GPU load and VRAM | Any PC. NVIDIA cards also report temperature, power and clocks through NVML |
 | Media control, artwork, seek | Any app that registers with Windows (Spotify, browsers, players) |
 | Per-app volume, output and input switching | Any PC |
-| Launcher with real cover art | Steam, Epic and Start Menu apps |
+| Launcher with real cover art | Steam, Epic and Start Menu apps. Ordered by what you pin and launch, so the first page is your own |
+| Web music sources | Whatever Windows' default browser is (read from Windows, never assumed). The service keeps its own identity; the browser is a small badge |
 | Performance modes | Windows power modes. On Windows 11 and recent Windows 10 these are the "Power mode" settings |
 | Screen brightness | A laptop panel, and the elevated agent |
-| CPU temperature | The ACPI thermal zone, and the elevated agent |
-| Fan speeds | A vendor interface. Not available through any standard Windows API |
-| Frames per second | [PresentMon](https://github.com/GameTechDev/PresentMon) installed separately |
+| CPU temperature | The elevated agent, plus [PawnIO](https://pawnio.eu/) (`winget install namazso.PawnIO`) so the sensor library can read your CPU. Intel and AMD, laptop or desktop. A Lenovo laptop's own interface and the ACPI thermal zone are tried too |
+| GPU temperature | NVIDIA through its driver. AMD and Intel graphics through the same sensor library as the CPU |
+| Fan speeds | A vendor interface. Not available through any standard Windows API. Today: Lenovo Legion/LOQ-class laptops. Everything else shows "not available" instead of a made-up reading. A fan is drawn only once it reports, so a one-fan laptop shows one |
+| Vendor performance profile | Lenovo laptops with the GameZone interface (Eco/Normal/Gaming, titled with the brand). Every other PC gets Windows' own power mode. More vendors need their firmware interface written and tested on that hardware; the hook is `Telemetry/` |
+| Game overlay shortcuts | Only those whose software is installed: Game Bar always, NVIDIA overlay and control panel with an NVIDIA GPU and its software, Steam's overlay with Steam |
+| Frames per second | The elevated agent (or your account in "Performance Log Users"). Read from Windows' own event tracing: any GPU, nothing to install. DirectX, OpenGL and Vulkan games |
 | Cast desktop audio into your microphone | [VB-Audio Virtual Cable](https://vb-audio.com/Cable/) installed separately |
+| Deck tiles, profiles that follow the foreground app | Any PC. Editing a layout needs the cable |
+| Clock, timers, stopwatch, pomodoro | Any PC. Timers are kept on the PC and survive a tablet reboot |
+| Calendar | Any PC. Paste a calendar's private `.ics` link once (Google, Outlook, iCloud and Fastmail all give one) and it refreshes itself; or drop an exported `.ics` file in the calendar folder. The link stays on the PC |
+| Mic mute, deafen, per-output volume, remembered app levels | Any PC |
+| Macro recorder | Any PC. Replays keys and mouse, so it cannot reach a window running as administrator unless the agent does too |
+| Notification mirror | Windows 10 or 11. Read-only, off until switched on from the cable. See [the usage notes](docs/USAGE.md#notifications) |
+| Night mode | The tablet's own screen. Nothing on the PC |
+| History graphs, alerts, top processes | Any PC. GPU throttle reasons need an NVIDIA driver; per-process GPU needs Windows' GPU counters |
+| Gaming sessions with 1% and 0.1% lows, frame-time graph | Any PC for the session record. Frame rates and lows need the same as Frames per second |
+| Auto performance mode while a game runs | A PC with a Windows power mode control. AC power only |
+| Cover colours, ambient view, visualizer | Any PC. The visualizer listens to the default output, only while shown |
+| Soundboard folders, colours and loops | Any PC |
 
 ### Running elevated
 
-Brightness and CPU temperature are refused by Windows to an ordinary process.
+Brightness, CPU temperature, fans and frame rates are refused by Windows to an ordinary process.
 `scripts\Install-Elevated.ps1` registers a logon scheduled task that runs the agent with
 full privileges, so those work and you are never prompted again. It is optional, and
 everything else works without it.
@@ -131,6 +175,24 @@ Wi-Fi. The PC stops beaconing the moment the cable returns.
 The tablet never names a file, a path or a URL. It names an **id**, and the PC decides what
 that id means by looking it up in its own list. A compromised or spoofed tablet therefore
 cannot make the PC launch something that was not already there.
+
+The same rule covers the deck. A tile is stored on the PC; pressing it sends only its id. A
+layout change is checked on the PC against a fixed list of step kinds, keys and actions before
+it is kept, and is refused outright unless the link is the USB cable.
+
+### Pairing
+
+The cable is the trust anchor. The first time a tablet connects over USB, the PC gives it a
+random 256-bit key. After that the network fallback works without the cable, but only for a
+tablet that holds the key: when one connects, the PC and the tablet each prove they know it
+(an HMAC over fresh random values from both sides, so nothing replays and the key never crosses
+the network), and until that is done the PC answers nothing and cannot be knocked off a working
+link. A tablet that has never been on the cable is told to plug in once. **Forget other tablets**
+on the Actions page replaces the key; the tablet on the cable keeps working.
+
+Over the network a tablet can use everything except the things that watch or rewrite the PC:
+recording a macro, switching on notification mirroring, editing a tile and unpairing are
+refused unless the link is the cable.
 
 ## Layout
 
@@ -180,6 +242,19 @@ Useful agent flags:
 The log is always written to `%LOCALAPPDATA%\CompanionDeck\host.log`, including when the
 agent runs from the scheduled task with no console attached.
 
+## How it was built
+
+This software was written with the help of Claude, an AI assistant made by Anthropic, working
+under my direction. I made the decisions, tested it on real hardware, and am responsible for the
+result. Claude is not a contributor to this repository.
+
 ## Licence
 
 MIT. See [LICENSE](LICENSE).
+
+### Third-party software
+
+[LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) (MPL-2.0) reads
+CPU temperature and fans, [TraceEvent](https://github.com/microsoft/perfview) (MIT) reads frame rates,
+and [NAudio](https://github.com/naudio/NAudio) (MIT) handles audio. Reading CPU sensors needs the
+signed [PawnIO](https://pawnio.eu/) driver, which is installed by you and never by this program.

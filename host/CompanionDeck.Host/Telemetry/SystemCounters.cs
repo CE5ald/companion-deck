@@ -60,6 +60,10 @@ public sealed class SystemCounters : IDisposable
     private IntPtr _pdhQuery, _diskCounter;
     private bool _pdhReady;
 
+    // Kept in a query of its own, so reading it never disturbs the disk counter's interval.
+    private IntPtr _freqQuery, _freqCounter;
+    private bool _freqReady;
+
 
     private ulong _prevIdle, _prevKernel, _prevUser;
     private long _prevRx, _prevTx;
@@ -88,6 +92,26 @@ public sealed class SystemCounters : IDisposable
             }
         }
         catch (Exception ex) { Log.Debug($"PDH disk counter unavailable: {ex.Message}"); }
+
+        try
+        {
+            if (PdhOpenQueryW(null, IntPtr.Zero, out _freqQuery) == 0 &&
+                PdhAddEnglishCounterW(_freqQuery, @"\Processor Information(_Total)\% of Maximum Frequency", IntPtr.Zero, out _freqCounter) == 0)
+            {
+                PdhCollectQueryData(_freqQuery);
+                _freqReady = true;
+            }
+        }
+        catch (Exception ex) { Log.Debug($"PDH frequency counter unavailable: {ex.Message}"); }
+    }
+
+    /// <summary>The CPU clock as a percentage of its rated maximum; above 100 while boosting.</summary>
+    public double? ReadCpuClockPercent()
+    {
+        if (!_freqReady) return null;
+        if (PdhCollectQueryData(_freqQuery) != 0) return null;
+        if (PdhGetFormattedCounterValue(_freqCounter, PdhFmtDouble | PdhFmtNoCap100, out _, out var v) != 0) return null;
+        return v.DoubleValue is > 0 and < 400 ? v.DoubleValue : null;
     }
 
     public double ReadCpuPercent()
@@ -166,6 +190,11 @@ public sealed class SystemCounters : IDisposable
 
     public void Dispose()
     {
+        if (_freqReady)
+        {
+            try { PdhCloseQuery(_freqQuery); } catch { }
+            _freqReady = false;
+        }
         if (_pdhReady)
         {
             try { PdhCloseQuery(_pdhQuery); } catch { }

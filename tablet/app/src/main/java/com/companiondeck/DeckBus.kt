@@ -10,7 +10,11 @@ data class LinkState(
     val phase: LinkPhase = LinkPhase.Idle,
     val transport: String = "",
     val hostName: String = "",
-    val since: Long = 0L
+    val since: Long = 0L,
+    /** "unpaired" while a network host is refused for want of a key; blank otherwise. */
+    val note: String = "",
+    /** This tablet holds the key that lets it use the network fallback. */
+    val paired: Boolean = false
 )
 
 /**

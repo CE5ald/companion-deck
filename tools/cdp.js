@@ -3,10 +3,15 @@
 // socket.
 
 const PORT = process.env.CDP_PORT || 9222;
-const expression = process.argv.slice(2).join(' ');
+// `--file script.js` reads the code from a file, which is the only safe way to pass anything with
+// quotes through PowerShell: it strips embedded double quotes from native arguments.
+const args = process.argv.slice(2);
+const expression = args[0] === '--file'
+  ? require('fs').readFileSync(args[1], 'utf8')
+  : args.join(' ');
 
 if (!expression) {
-  console.error('usage: node tools/cdp.js "<javascript expression>"');
+  console.error('usage: node tools/cdp.js "<javascript expression>"  |  node tools/cdp.js --file script.js');
   process.exit(2);
 }
 

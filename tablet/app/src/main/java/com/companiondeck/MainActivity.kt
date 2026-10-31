@@ -190,6 +190,21 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface
         fun send(json: String) = DeckBus.sendJson(json)
 
+        /**
+         * Screen brightness for this app's window only, 1 to 100, or anything below 1 to hand
+         * control back to the system. Needs no permission, and is what lets the deck dim itself
+         * at night without touching the tablet's own setting.
+         */
+        @JavascriptInterface
+        fun setBrightness(percent: Int) {
+            runOnUiThread {
+                val lp = window.attributes
+                lp.screenBrightness = if (percent < 1) WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                                      else percent.coerceIn(1, 100) / 100f
+                window.attributes = lp
+            }
+        }
+
         /** Lets the UI declare what it is showing, which throttles the laptop's work. */
         @JavascriptInterface
         fun setSubscription(sectionsCsv: String, hz: Double) {
@@ -298,6 +313,8 @@ class MainActivity : AppCompatActivity() {
                     put("phase", state.phase.name.lowercase())
                     put("transport", state.transport)
                     put("hostName", state.hostName)
+                    put("note", state.note)
+                    put("paired", state.paired)
                 }.toString()
                 runOnUiThread { deliver(json) }
                 if (state.phase == LinkPhase.Connected) { markConnected(); pushSubscription() }
